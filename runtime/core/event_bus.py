@@ -12,11 +12,9 @@ import json
 import os
 from datetime import datetime
 
-from src.core.event_log_sqlite import EventLogSQLite
+from runtime.storage import get_storage
 
 EVENT_LOG_PATH = os.environ.get("AEON_EVENT_LOG", "aeon_event_log.jsonl")
-
-event_log_sqlite = EventLogSQLite()
 
 class EventBus:
     def __init__(self):
@@ -31,16 +29,22 @@ class EventBus:
                 json.dump({
                     "event": event_type,
                     "payload": payload,
-                    "timestamp": threading.current_thread().name
+                    "timestamp": datetime.utcnow().isoformat()
                 }, f)
                 f.write("\n")
         except Exception as e:
             print(f"[EventBus] Error al escribir evento en log: {e}")
-        # Persistencia en SQLite
+        # Persistencia en capa de storage (sqlite/postgres/hybrid)
         try:
-            event_log_sqlite.log_event(event_type, payload, datetime.utcnow().isoformat())
+            storage = get_storage()
+            storage.append_event(
+                event_type=event_type,
+                payload=payload if isinstance(payload, dict) else {"value": payload},
+                timestamp=datetime.utcnow().isoformat(),
+                source="event_bus",
+            )
         except Exception as e:
-            print(f"[EventBus] Error al escribir evento en SQLite: {e}")
+            print(f"[EventBus] Error al persistir evento: {e}")
         # Emisión del evento
         with self._lock:
             listeners = list(self._listeners[event_type])

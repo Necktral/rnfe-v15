@@ -12,6 +12,8 @@ CONTRACT_FILES = [
     "tool_request.schema.json",
     "tool_result.schema.json",
     "session_bridge.schema.json",
+    "reasoning_trace.schema.json",
+    "artifact_index.schema.json",
 ]
 
 
@@ -23,4 +25,3 @@ def test_contract_schemas_exist_and_parse():
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["type"] == "object"
         assert "required" in payload and payload["required"], f"{name} must define required fields"
-
