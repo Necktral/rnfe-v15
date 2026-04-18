@@ -39,17 +39,19 @@ class TestRunnerParityThermal:
         )
         res_scenario = scenario.run_episode(external_input=0.05)
 
-        # Both should have valid reasoning sequences
+        # Legacy runner always uses fixed 6-family Stratum I sequence
         assert res_legacy["episode"]["result"]["reasoning_sequence"] == [
             "ABD", "ANA", "CAU", "CTF", "DED", "PROB",
         ]
+        # Scenario runner defaults to level_aware.
+        # initial_temperature=0.82 → level 2 (WARNING) → Stratum I + Stratum II
         assert res_scenario["episode"]["result"]["reasoning_sequence"] == [
-            "ABD", "ANA", "CAU", "CTF", "DED", "PROB",
+            "ABD", "ANA", "CAU", "CTF", "DED", "PROB", "OPT", "PLAN",
         ]
         storage.close()
 
     def test_both_runners_produce_comparable_traces(self, tmp_path: Path):
-        """Both runners produce traces of equal length."""
+        """Both runners produce traces with at least the core Stratum I families."""
         storage = _storage(tmp_path)
 
         legacy = MinimalCognitiveEpisodeRunner(storage=storage, run_id="run-parity-trace-l")
@@ -64,7 +66,9 @@ class TestRunnerParityThermal:
         trace_legacy = res_legacy["episode"]["trace"]
         trace_scenario = res_scenario["episode"]["trace"]
 
-        assert len(trace_legacy) == len(trace_scenario)
+        # Legacy: 6 families (fixed); scenario: ≥6 families (level_aware escalates)
+        assert len(trace_legacy) >= 6
+        assert len(trace_scenario) >= 6
         storage.close()
 
     def test_both_runners_materialize_artifact(self, tmp_path: Path):

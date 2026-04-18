@@ -32,11 +32,13 @@ class ThermalWorldState:
 class ThermalScenario(CognitiveScenario):
     """Escenario homeostático de control de temperatura.
 
-    Este escenario modela un sistema de control de temperatura con:
-    - Variable principal: temperature (0.0 - 1.0)
-    - Intervenciones: activate_cooling, deactivate_cooling
-    - Umbral de alarma: configurable (default 0.85)
-    - Dinámica: enfriamiento reduce temperatura, calor externo la aumenta
+    Este escenario modela un sistema de control de temperatura con tres niveles:
+    - Nivel 1 (NORMAL):   temperature < warning_threshold
+    - Nivel 2 (WARNING):  warning_threshold ≤ temperature < alarm_threshold
+    - Nivel 3 (CRITICAL): temperature ≥ alarm_threshold (alarm=True)
+
+    Los parámetros están normalizados en [0.0, 1.0] como los rangos máximos
+    de los parámetros de las familias de razonamientos.
     """
 
     def __init__(
@@ -45,15 +47,18 @@ class ThermalScenario(CognitiveScenario):
         initial_temperature: float = 0.82,
         alarm_threshold: float = 0.85,
         cooling_effect: float = 0.07,
+        warning_threshold: float = 0.60,
     ):
         """Inicializa escenario térmico.
 
         Args:
             initial_temperature: Temperatura inicial (0.0-1.0).
-            alarm_threshold: Umbral de alarma.
+            alarm_threshold: Umbral de alarma / nivel crítico (nivel 2→3).
             cooling_effect: Efecto del enfriamiento por paso.
+            warning_threshold: Umbral de advertencia (nivel 1→2). Default 0.60.
         """
         self._alarm_threshold = alarm_threshold
+        self._warning_threshold = warning_threshold
         self._cooling_effect = cooling_effect
         self._state = ThermalWorldState(
             temperature=initial_temperature,
@@ -62,12 +67,19 @@ class ThermalScenario(CognitiveScenario):
         )
         self._config = ScenarioConfig(
             name="thermal_homeostasis",
-            description="Control de temperatura homeostático con enfriamiento activo",
+            description="Control de temperatura homeostático con tres niveles (normal/advertencia/crítico)",
             main_variable="temperature",
             alarm_threshold=alarm_threshold,
+            warning_threshold=warning_threshold,
             interventions=["activate_cooling", "deactivate_cooling"],
             formula_template="TEMP_HIGH -> ACTIVATE_COOLING",
-            type_context={"TEMP_HIGH": "bool", "ACTIVATE_COOLING": "bool"},
+            type_context={
+                "TEMP_NORMAL": "bool",
+                "TEMP_WARNING": "bool",
+                "TEMP_HIGH": "bool",
+                "ACTIVATE_COOLING": "bool",
+                "KEEP_IDLE": "bool",
+            },
         )
 
     @property
@@ -139,7 +151,8 @@ class ThermalScenario(CognitiveScenario):
                 CausalEdge(source="temperature", target="alarm", polarity="+"),
             ),
             proposition_vocabulary=frozenset({
-                "TEMP_HIGH", "TEMP_NORMAL", "COOLING_ACTIVE", "ACTIVATE_COOLING", "KEEP_IDLE",
+                "TEMP_HIGH", "TEMP_WARNING", "TEMP_NORMAL",
+                "COOLING_ACTIVE", "ACTIVATE_COOLING", "KEEP_IDLE",
             }),
         )
 
@@ -148,9 +161,32 @@ class ThermalScenario(CognitiveScenario):
         """Umbral de alarma para compatibilidad con código existente."""
         return self._alarm_threshold
 
+    @property
+    def warning_threshold(self) -> float:
+        """Umbral de advertencia (nivel 1→2)."""
+        return self._warning_threshold
+
+    def _compute_level(self, temperature: float) -> int:
+        """Determina el nivel del mundo (1/2/3) según la temperatura.
+
+        Returns:
+            1 (NORMAL), 2 (WARNING) o 3 (CRITICAL).
+        """
+        if temperature >= self._alarm_threshold:
+            return 3
+        if self._warning_threshold > 0.0 and temperature >= self._warning_threshold:
+            return 2
+        return 1
+
     def observe(self) -> ScenarioObservation:
-        temp_high = self._state.temperature >= self._alarm_threshold
-        propositions = ["TEMP_HIGH"] if temp_high else ["TEMP_NORMAL"]
+        level = self._compute_level(self._state.temperature)
+        if level == 3:
+            proposition = "TEMP_HIGH"
+        elif level == 2:
+            proposition = "TEMP_WARNING"
+        else:
+            proposition = "TEMP_NORMAL"
+        propositions = [proposition]
         if self._state.cooling_active:
             propositions.append("COOLING_ACTIVE")
 
@@ -161,6 +197,7 @@ class ThermalScenario(CognitiveScenario):
             },
             propositions=propositions,
             alarm=self._state.alarm,
+            level=level,
         )
 
     def _compute_transition(
@@ -197,6 +234,7 @@ class ThermalScenario(CognitiveScenario):
             intervention=intervention,
             external_input=external_input,
         )
+        level = self._compute_level(self._state.temperature)
         return ScenarioTransition(
             state={
                 "temperature": self._state.temperature,
@@ -204,6 +242,7 @@ class ThermalScenario(CognitiveScenario):
             },
             propositions=self.observe().propositions,
             alarm=self._state.alarm,
+            level=level,
         )
 
     def simulate_counterfactual(
@@ -217,28 +256,40 @@ class ThermalScenario(CognitiveScenario):
             intervention=intervention,
             external_input=external_input,
         )
+        level = self._compute_level(simulated.temperature)
+        if level == 3:
+            proposition = "TEMP_HIGH"
+        elif level == 2:
+            proposition = "TEMP_WARNING"
+        else:
+            proposition = "TEMP_NORMAL"
         return ScenarioTransition(
             state={
                 "temperature": simulated.temperature,
                 "cooling_active": simulated.cooling_active,
             },
-            propositions=[
-                "TEMP_HIGH" if simulated.temperature >= self._alarm_threshold else "TEMP_NORMAL"
-            ],
+            propositions=[proposition],
             alarm=simulated.alarm,
+            level=level,
         )
 
     def get_formula(self, observation: ScenarioObservation) -> str:
-        return self._config.formula_template
+        if observation.level == 3:
+            return "TEMP_HIGH -> ACTIVATE_COOLING"
+        if observation.level == 2:
+            return "TEMP_WARNING -> ACTIVATE_COOLING"
+        return "TEMP_NORMAL -> KEEP_IDLE"
 
     def select_intervention(self, observation: ScenarioObservation) -> str:
-        if observation.alarm:
+        if observation.level >= 2:
             return "activate_cooling"
         return "deactivate_cooling"
 
     def get_main_proposition(self, observation: ScenarioObservation) -> str:
-        if observation.alarm:
+        if observation.level == 3:
             return "TEMP_HIGH"
+        if observation.level == 2:
+            return "TEMP_WARNING"
         return "TEMP_NORMAL"
 
     def get_intervention_proposition(self, intervention: str) -> str:

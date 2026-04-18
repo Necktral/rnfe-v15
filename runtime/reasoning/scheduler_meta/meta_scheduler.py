@@ -25,11 +25,21 @@ class MetaScheduler:
 
     DEFAULT_SEQUENCE = ["abd", "ana", "cau", "ctf", "ded", "prob"]
 
+    # Secuencias por nivel del mundo — alineadas con los 3 estratos del SSOT:
+    # Nivel 1: Estrato I  (familias inferenciales primarias)
+    # Nivel 2: Estrato I + Estrato II (+ familias operativas de runtime)
+    # Nivel 3: Todos los estratos (+ Estrato III: gobierno y crítica)
+    LEVEL_SEQUENCES: dict[int, list[str]] = {
+        1: ["abd", "ana", "cau", "ctf", "ded", "prob"],
+        2: ["abd", "ana", "cau", "ctf", "ded", "prob", "opt", "plan"],
+        3: ["abd", "ana", "cau", "ctf", "ded", "prob", "opt", "plan", "dia_adv", "fal_guard", "heur"],
+    }
+
     def __init__(
         self,
         sequence: List[str] | None = None,
         trace_store: object | None = None,
-        mode: Literal["fixed", "adaptive"] = "fixed",
+        mode: Literal["fixed", "adaptive", "level_aware"] = "fixed",
         max_steps: int | None = None,
     ):
         self.sequence = sequence or list(self.DEFAULT_SEQUENCE)
@@ -50,6 +60,12 @@ class MetaScheduler:
                 budget=budget,
                 allow_experimental=allow_experimental,
             )
+        elif self.mode == "level_aware":
+            world_level = int(state.get("world_level", 1))
+            world_level = max(1, min(3, world_level))
+            selected = list(self.LEVEL_SEQUENCES[world_level])
+            scores = {fam: 1.0 for fam in selected}
+            recommended = selected[-1] if selected else "prob"
         else:
             selected = list(self.sequence)
             scores = {fam: 1.0 for fam in selected}

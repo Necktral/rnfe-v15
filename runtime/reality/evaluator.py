@@ -69,10 +69,30 @@ ADAPTIVE_MIN_PROFILE = ClosureProfile(
     prob_must_close=True,
 )
 
+# Perfil nivel-consciente: 3 estratos del SSOT de razonamientos
+# Nivel 1 → Estrato I  (ABD, ANA, CAU, CTF, DED, PROB)
+# Nivel 2 → Estrato I + Estrato II  (+ OPT, PLAN)
+# Nivel 3 → todos los estratos  (+ DIA_ADV, FAL_GUARD, HEUR)
+# PROB no necesita cerrar porque Estrato III viene después (según SSOT §6)
+LEVEL_AWARE_PROFILE = ClosureProfile(
+    name="level_aware",
+    required_sequence=["ABD", "ANA", "CAU", "CTF", "DED", "PROB"],
+    partial_order={
+        "ABD": {"ANA", "CAU", "CTF", "DED", "PROB"},
+        "ANA": {"CAU", "CTF", "DED", "PROB"},
+        "CAU": {"CTF", "DED", "PROB"},
+        "CTF": {"DED", "PROB"},
+        "DED": {"PROB"},
+    },
+    optional_families={"OPT", "PLAN", "DIA_ADV", "FAL_GUARD", "HEUR", "EML_SR"},
+    prob_must_close=False,
+)
+
 # Registro de perfiles disponibles
 CLOSURE_PROFILES: Dict[str, ClosureProfile] = {
     "baseline_fixed": BASELINE_FIXED_PROFILE,
     "adaptive_min": ADAPTIVE_MIN_PROFILE,
+    "level_aware": LEVEL_AWARE_PROFILE,
 }
 
 # Mantener compatibilidad con código existente
@@ -92,10 +112,22 @@ def _has_episode_closed_event(storage, *, run_id: str | None, episode_id: str) -
     return False
 
 
-# Contextos de tipos conocidos por escenario
+# Contextos de tipos conocidos por escenario — incluyen todos los niveles del mundo
 KNOWN_TYPE_CONTEXTS: Dict[str, Dict[str, str]] = {
-    "thermal_homeostasis": {"TEMP_HIGH": "bool", "ACTIVATE_COOLING": "bool"},
-    "resource_management": {"STOCK_LOW": "bool", "START_PRODUCTION": "bool"},
+    "thermal_homeostasis": {
+        "TEMP_NORMAL": "bool",
+        "TEMP_WARNING": "bool",
+        "TEMP_HIGH": "bool",
+        "ACTIVATE_COOLING": "bool",
+        "KEEP_IDLE": "bool",
+    },
+    "resource_management": {
+        "STOCK_ADEQUATE": "bool",
+        "STOCK_LOW": "bool",
+        "STOCK_CRITICAL": "bool",
+        "START_PRODUCTION": "bool",
+        "KEEP_IDLE": "bool",
+    },
 }
 
 
@@ -264,7 +296,7 @@ def evaluate_episode_closure(
         storage: Facade de almacenamiento.
         run_id: ID de corrida.
         result: Resultado del episodio con episode, smg_snapshot, etc.
-        closure_profile: Nombre del perfil de cierre ('baseline_fixed' o 'adaptive_min').
+        closure_profile: Nombre del perfil de cierre ('baseline_fixed', 'adaptive_min' o 'level_aware').
 
     Returns:
         Dict con episode_id, checks, closure_passed, trace_integrity.
