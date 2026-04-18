@@ -289,7 +289,7 @@ def _measure_frontier(
     start, end = sweep_range
     step_size = (end - start) / (steps - 1)
 
-    activation_points = []
+    activation_trace: List[Tuple[float, bool]] = []
 
     for i in range(steps):
         value = start + (i * step_size)
@@ -300,15 +300,23 @@ def _measure_frontier(
         budget = compute_budget(features)
         sequence, _, _ = select_sequence(features=features, budget=budget, allow_experimental=True)
 
-        if family_name in sequence:
-            activation_points.append(value)
+        activation_trace.append((value, family_name in sequence))
 
-    if activation_points:
-        threshold_low = min(activation_points)
-        threshold_high = max(activation_points)
+    transition_window: Tuple[float, float] | None = None
+    for i in range(1, len(activation_trace)):
+        prev_value, prev_active = activation_trace[i - 1]
+        curr_value, curr_active = activation_trace[i]
+        if prev_active != curr_active:
+            transition_window = (
+                min(prev_value, curr_value),
+                max(prev_value, curr_value),
+            )
+            break
+
+    if transition_window is not None:
+        threshold_low, threshold_high = transition_window
         threshold_width = threshold_high - threshold_low
-
-        # Stability: inverse of width
+        # Frente agudo => más estable.
         stability = 1.0 - min(threshold_width / 0.2, 1.0)
     else:
         threshold_low = threshold_nominal

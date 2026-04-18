@@ -17,7 +17,12 @@ def should_early_stop(
         return True
     if step_index >= max_steps - 1:
         return True
-    if features["edge_pressure"] >= 0.85 and state.get("ded_validated"):
+    # En alta presión permitimos cortar temprano solo si PROB ya cerró la calibración.
+    if (
+        features["edge_pressure"] >= 0.85
+        and state.get("ded_validated")
+        and state.get("prob_calibrated")
+    ):
         return True
     return False
 

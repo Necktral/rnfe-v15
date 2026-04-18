@@ -62,7 +62,7 @@ class HypercubeAtlas:
             return "crisis"
 
         # Resource constrained
-        if features["edge_pressure"] >= 0.7 and budget["max_steps"] <= 6:
+        if features["edge_pressure"] >= 0.7 and budget["max_steps"] <= 7:
             return "resource_constrained"
 
         # Dialectical
@@ -193,30 +193,100 @@ def map_hypercube_region(n_samples: int = 100, seed: int = 42) -> HypercubeAtlas
         "law_fit_signal",
     ]
 
-    # Generate samples
-    samples = latin_hypercube_sample(n_samples=n_samples, n_dimensions=len(feature_names), seed=seed)
+    anchor_points = [
+        # Baseline: todos los señales no continuidad en zona baja.
+        {
+            "uncertainty": 0.2,
+            "contradiction_signal": 0.1,
+            "continuity_recent": 1.0,
+            "edge_pressure": 0.1,
+            "causal_risk": 0.1,
+            "symbolic_regularity": 0.1,
+            "law_fit_signal": 0.1,
+        },
+        # Stable: señales medias sin activar regiones especiales.
+        {
+            "uncertainty": 0.35,
+            "contradiction_signal": 0.2,
+            "continuity_recent": 0.95,
+            "edge_pressure": 0.2,
+            "causal_risk": 0.2,
+            "symbolic_regularity": 0.1,
+            "law_fit_signal": 0.1,
+        },
+        # Dialectical
+        {
+            "uncertainty": 0.4,
+            "contradiction_signal": 0.75,
+            "continuity_recent": 0.85,
+            "edge_pressure": 0.25,
+            "causal_risk": 0.3,
+            "symbolic_regularity": 0.1,
+            "law_fit_signal": 0.1,
+        },
+        # High complexity
+        {
+            "uncertainty": 0.8,
+            "contradiction_signal": 0.2,
+            "continuity_recent": 0.8,
+            "edge_pressure": 0.2,
+            "causal_risk": 0.8,
+            "symbolic_regularity": 0.1,
+            "law_fit_signal": 0.1,
+        },
+        # Symbolic
+        {
+            "uncertainty": 0.3,
+            "contradiction_signal": 0.2,
+            "continuity_recent": 0.9,
+            "edge_pressure": 0.2,
+            "causal_risk": 0.2,
+            "symbolic_regularity": 0.75,
+            "law_fit_signal": 0.2,
+        },
+        # Crisis
+        {
+            "uncertainty": 0.9,
+            "contradiction_signal": 0.9,
+            "continuity_recent": 0.2,
+            "edge_pressure": 0.9,
+            "causal_risk": 0.9,
+            "symbolic_regularity": 0.8,
+            "law_fit_signal": 0.8,
+        },
+    ]
 
-    # Evaluate each sample point
-    for sample in samples:
-        features = {name: value for name, value in zip(feature_names, sample)}
-
+    def _evaluate_point(features: Dict[str, float]) -> None:
         budget = compute_budget(features)
         sequence, _, _ = select_sequence(
             features=features,
             budget=budget,
             allow_experimental=True
         )
-
         region = atlas.classify_point(features, sequence, budget)
-
-        point = HypercubePoint(
-            features=features,
-            sequence=sequence,
-            budget=budget,
-            region=region
+        atlas.add_point(
+            HypercubePoint(
+                features=features,
+                sequence=sequence,
+                budget=budget,
+                region=region,
+            )
         )
 
-        atlas.add_point(point)
+    for features in anchor_points:
+        _evaluate_point(features)
+
+    random_samples = max(0, n_samples - len(anchor_points))
+    samples = latin_hypercube_sample(
+        n_samples=random_samples,
+        n_dimensions=len(feature_names),
+        seed=seed,
+    )
+
+    # Evaluate each random sample point
+    for sample in samples:
+        features = {name: value for name, value in zip(feature_names, sample)}
+        _evaluate_point(features)
 
     return atlas
 

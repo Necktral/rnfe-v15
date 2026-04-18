@@ -69,6 +69,7 @@ def measure_hysteresis(
 
     # Ascending path
     step_size = (end_value - start_value) / (steps - 1)
+    quantization_margin = max(0.02, abs(step_size) + 1e-9)
     for i in range(steps):
         value = start_value + (i * step_size)
         value = max(0.0, min(1.0, value))
@@ -124,7 +125,8 @@ def measure_hysteresis(
             result.activation_point = activation_point
             result.deactivation_point = deactivation_point
             result.hysteresis_width = abs(activation_point - deactivation_point)
-            result.has_hysteresis = result.hysteresis_width > 0.02  # Significant hysteresis
+            # Evita falsos positivos por resolución discreta del barrido.
+            result.has_hysteresis = result.hysteresis_width > quantization_margin
 
     return result
 

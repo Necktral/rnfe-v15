@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from typing import Dict, List, Tuple
+from runtime.reasoning.scheduler_meta.context_features import normalize_feature_vector
 
 
 FAMILY_POOL = [
@@ -18,6 +19,7 @@ FAMILY_POOL = [
     "fal_guard",
     "eml_sr",
 ]
+CORE_SEQUENCE = ["abd", "ana", "cau", "ctf", "ded", "prob"]
 
 
 def score_families(features: Dict[str, float]) -> Dict[str, float]:
@@ -47,38 +49,40 @@ def _dedup(sequence: List[str]) -> List[str]:
     return out
 
 
+def _active_optional_families(
+    features: Dict[str, float], *, allow_experimental: bool
+) -> List[str]:
+    active: List[str] = []
+    if features["edge_pressure"] >= 0.715:
+        active.append("heur")
+    if features["contradiction_signal"] >= 0.45:
+        active.extend(["dia_adv", "fal_guard"])
+    if allow_experimental and (
+        features["symbolic_regularity"] >= 0.4
+        or features["law_fit_signal"] >= 0.4
+    ):
+        active.append("eml_sr")
+    return active
+
+
 def select_sequence(
     *,
     features: Dict[str, float],
     budget: Dict[str, float],
     allow_experimental: bool = False,
 ) -> Tuple[List[str], Dict[str, float], str]:
-    scores = score_families(features)
-    max_steps = int(budget["max_steps"])
-    sequence: List[str] = ["abd"]
-    if features["edge_pressure"] >= 0.7:
-        sequence.append("heur")
-    if features["contradiction_signal"] >= 0.45:
-        sequence.extend(["dia_adv", "fal_guard"])
-    if allow_experimental and (
-        features.get("symbolic_regularity", 0.0) >= 0.4
-        or features.get("law_fit_signal", 0.0) >= 0.4
-    ):
-        sequence.append("eml_sr")
-    sequence.extend(["ana", "cau", "ctf", "ded", "prob"])
-
-    ranked = sorted(
-        [fam for fam in FAMILY_POOL if fam not in sequence],
-        key=lambda fam: (-scores[fam], fam),
+    normalized = normalize_feature_vector(features)
+    scores = score_families(normalized)
+    requested_steps = int(float(budget.get("max_steps", len(CORE_SEQUENCE))))
+    max_steps = max(len(CORE_SEQUENCE), min(10, requested_steps))
+    active_optional = _active_optional_families(
+        normalized, allow_experimental=allow_experimental
     )
-    sequence.extend(ranked)
-    sequence = _dedup(sequence)
-    sequence = sequence[:max_steps]
 
-    if "prob" not in sequence:
-        sequence[-1] = "prob"
-    elif sequence[-1] != "prob":
-        sequence = [fam for fam in sequence if fam != "prob"] + ["prob"]
+    optional_slots = max(0, max_steps - len(CORE_SEQUENCE))
+    optional_selected = active_optional[:optional_slots]
+    sequence: List[str] = ["abd", *optional_selected, *CORE_SEQUENCE[1:]]
+    sequence = _dedup(sequence)
 
     remaining = [fam for fam in FAMILY_POOL if fam not in sequence]
     if remaining:
