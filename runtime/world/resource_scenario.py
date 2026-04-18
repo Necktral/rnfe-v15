@@ -30,17 +30,19 @@ class ResourceWorldState:
 
 
 class ResourceScenario(CognitiveScenario):
-    """Escenario de gestión de recursos/inventario.
+    """Escenario de gestión de recursos/inventario con tres niveles.
 
-    Este escenario modela un sistema de control de inventario con:
-    - Variable principal: stock_level (0.0 - 1.0)
-    - Intervenciones: start_production, stop_production
-    - Umbral de escasez: configurable (default 0.20)
-    - Dinámica: producción aumenta stock, consumo lo reduce
+    Este escenario modela un sistema de control de inventario con tres niveles:
+    - Nivel 1 (ADEQUATE): stock_level > warning_threshold
+    - Nivel 2 (LOW):      scarcity_threshold < stock_level ≤ warning_threshold
+    - Nivel 3 (CRITICAL): stock_level ≤ scarcity_threshold (alarm=True)
 
     La causalidad es inversa al escenario térmico:
-    - En térmico: HIGH -> ACTIVATE (reducir valor alto)
-    - En recursos: LOW -> ACTIVATE (aumentar valor bajo)
+    - En térmico: HIGH → ACTIVATE (reducir valor alto)
+    - En recursos: LOW/CRITICAL → START_PRODUCTION (aumentar valor bajo)
+
+    Los parámetros están normalizados en [0.0, 1.0] como los rangos máximos
+    de los parámetros de las familias de razonamientos.
     """
 
     def __init__(
@@ -49,16 +51,19 @@ class ResourceScenario(CognitiveScenario):
         initial_stock: float = 0.25,
         scarcity_threshold: float = 0.20,
         production_rate: float = 0.08,
+        warning_threshold: float = 0.40,
     ):
         """Inicializa escenario de recursos.
 
         Args:
             initial_stock: Nivel de stock inicial (0.0-1.0).
-            scarcity_threshold: Umbral de escasez.
+            scarcity_threshold: Umbral de escasez crítica (nivel 2→3).
             production_rate: Tasa de producción por paso.
+            warning_threshold: Umbral de advertencia de stock bajo (nivel 1→2). Default 0.40.
         """
         self._scarcity_threshold = scarcity_threshold
         self._production_rate = production_rate
+        self._warning_threshold = warning_threshold
         self._state = ResourceWorldState(
             stock_level=initial_stock,
             production_active=False,
@@ -66,12 +71,19 @@ class ResourceScenario(CognitiveScenario):
         )
         self._config = ScenarioConfig(
             name="resource_management",
-            description="Gestión de inventario con producción activable",
+            description="Gestión de inventario con producción activable y tres niveles (adecuado/bajo/crítico)",
             main_variable="stock_level",
             alarm_threshold=scarcity_threshold,
+            warning_threshold=warning_threshold,
             interventions=["start_production", "stop_production"],
-            formula_template="STOCK_LOW -> START_PRODUCTION",
-            type_context={"STOCK_LOW": "bool", "START_PRODUCTION": "bool"},
+            formula_template="STOCK_CRITICAL -> START_PRODUCTION",
+            type_context={
+                "STOCK_ADEQUATE": "bool",
+                "STOCK_LOW": "bool",
+                "STOCK_CRITICAL": "bool",
+                "START_PRODUCTION": "bool",
+                "KEEP_IDLE": "bool",
+            },
         )
 
     @property
@@ -143,8 +155,8 @@ class ResourceScenario(CognitiveScenario):
                 CausalEdge(source="stock_level", target="scarcity_alert", polarity="-"),
             ),
             proposition_vocabulary=frozenset({
-                "STOCK_LOW", "STOCK_ADEQUATE", "PRODUCTION_ACTIVE",
-                "START_PRODUCTION", "KEEP_IDLE",
+                "STOCK_CRITICAL", "STOCK_LOW", "STOCK_ADEQUATE",
+                "PRODUCTION_ACTIVE", "START_PRODUCTION", "KEEP_IDLE",
             }),
         )
 
@@ -153,9 +165,36 @@ class ResourceScenario(CognitiveScenario):
         """Umbral de escasez para compatibilidad."""
         return self._scarcity_threshold
 
+    @property
+    def warning_threshold(self) -> float:
+        """Umbral de advertencia de stock bajo (nivel 1→2)."""
+        return self._warning_threshold
+
+    def _compute_level(self, stock_level: float) -> int:
+        """Determina el nivel del mundo (1/2/3) según el stock.
+
+        Returns:
+            1 (ADEQUATE), 2 (LOW) o 3 (CRITICAL).
+
+        Note:
+            ``warning_threshold=0.0`` deshabilita el nivel 2 — actúa como bandera
+            de habilitación ya que ningún valor normalizado útil es negativo.
+        """
+        if stock_level <= self._scarcity_threshold:
+            return 3
+        if self._warning_threshold > 0.0 and stock_level <= self._warning_threshold:
+            return 2
+        return 1
+
     def observe(self) -> ScenarioObservation:
-        stock_low = self._state.stock_level <= self._scarcity_threshold
-        propositions = ["STOCK_LOW"] if stock_low else ["STOCK_ADEQUATE"]
+        level = self._compute_level(self._state.stock_level)
+        if level == 3:
+            proposition = "STOCK_CRITICAL"
+        elif level == 2:
+            proposition = "STOCK_LOW"
+        else:
+            proposition = "STOCK_ADEQUATE"
+        propositions = [proposition]
         if self._state.production_active:
             propositions.append("PRODUCTION_ACTIVE")
 
@@ -166,6 +205,7 @@ class ResourceScenario(CognitiveScenario):
             },
             propositions=propositions,
             alarm=self._state.scarcity_alert,
+            level=level,
         )
 
     def _compute_transition(
@@ -209,6 +249,7 @@ class ResourceScenario(CognitiveScenario):
             intervention=intervention,
             external_input=external_input,
         )
+        level = self._compute_level(self._state.stock_level)
         return ScenarioTransition(
             state={
                 "stock_level": self._state.stock_level,
@@ -216,6 +257,7 @@ class ResourceScenario(CognitiveScenario):
             },
             propositions=self.observe().propositions,
             alarm=self._state.scarcity_alert,
+            level=level,
         )
 
     def simulate_counterfactual(
@@ -229,30 +271,39 @@ class ResourceScenario(CognitiveScenario):
             intervention=intervention,
             external_input=external_input,
         )
+        level = self._compute_level(simulated.stock_level)
+        if level == 3:
+            proposition = "STOCK_CRITICAL"
+        elif level == 2:
+            proposition = "STOCK_LOW"
+        else:
+            proposition = "STOCK_ADEQUATE"
         return ScenarioTransition(
             state={
                 "stock_level": simulated.stock_level,
                 "production_active": simulated.production_active,
             },
-            propositions=[
-                "STOCK_LOW"
-                if simulated.stock_level <= self._scarcity_threshold
-                else "STOCK_ADEQUATE"
-            ],
+            propositions=[proposition],
             alarm=simulated.scarcity_alert,
+            level=level,
         )
 
     def get_formula(self, observation: ScenarioObservation) -> str:
-        return self._config.formula_template
+        if observation.level == 3:
+            return "STOCK_CRITICAL -> START_PRODUCTION"
+        if observation.level == 2:
+            return "STOCK_LOW -> START_PRODUCTION"
+        return "STOCK_ADEQUATE -> KEEP_IDLE"
 
     def select_intervention(self, observation: ScenarioObservation) -> str:
-        # En recursos: activar producción cuando hay escasez
-        if observation.alarm:
+        if observation.level >= 2:
             return "start_production"
         return "stop_production"
 
     def get_main_proposition(self, observation: ScenarioObservation) -> str:
-        if observation.alarm:
+        if observation.level == 3:
+            return "STOCK_CRITICAL"
+        if observation.level == 2:
             return "STOCK_LOW"
         return "STOCK_ADEQUATE"
 

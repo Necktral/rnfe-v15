@@ -18,12 +18,14 @@ class ScenarioObservation:
     Attributes:
         state: Diccionario con estado observable del mundo.
         propositions: Lista de proposiciones inferibles del estado.
-        alarm: Indicador de condición de alarma/umbral.
+        alarm: Indicador de condición de alarma/umbral (nivel 3).
+        level: Nivel del mundo (1=normal, 2=advertencia, 3=crítico).
     """
 
     state: Dict[str, Any]
     propositions: List[str]
     alarm: bool
+    level: int = 1
 
 
 @dataclass
@@ -34,11 +36,13 @@ class ScenarioTransition:
         state: Nuevo estado después de la transición.
         propositions: Proposiciones actualizadas.
         alarm: Estado de alarma actualizado.
+        level: Nivel del mundo resultante (1=normal, 2=advertencia, 3=crítico).
     """
 
     state: Dict[str, Any]
     propositions: List[str]
     alarm: bool
+    level: int = 1
 
 
 @dataclass
@@ -49,10 +53,12 @@ class ScenarioConfig:
         name: Nombre único del escenario.
         description: Descripción del escenario.
         main_variable: Variable principal del escenario.
-        alarm_threshold: Umbral para activar alarma.
+        alarm_threshold: Umbral para activar alarma (límite nivel 2→3).
         interventions: Lista de intervenciones válidas.
-        formula_template: Plantilla de fórmula LOTF.
+        formula_template: Plantilla de fórmula LOTF (nivel crítico).
         type_context: Contexto de tipos para checker LOTF.
+        warning_threshold: Umbral de advertencia (límite nivel 1→2).
+            Valor 0.0 deshabilita el nivel de advertencia.
     """
 
     name: str
@@ -62,6 +68,7 @@ class ScenarioConfig:
     interventions: List[str]
     formula_template: str
     type_context: Dict[str, str]
+    warning_threshold: float = 0.0
 
 
 class CognitiveScenario(ABC):
@@ -227,6 +234,7 @@ class CognitiveScenario(ABC):
         return {
             **observation.state,
             "alarm": observation.alarm,
+            "world_level": observation.level,
             "propositions": observation.propositions,
             "scenario": self.config.name,
         }
@@ -243,4 +251,5 @@ class CognitiveScenario(ABC):
         return {
             **transition.state,
             "alarm": transition.alarm,
+            "world_level": transition.level,
         }

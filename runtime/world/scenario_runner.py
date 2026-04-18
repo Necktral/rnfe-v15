@@ -42,7 +42,7 @@ class ScenarioEpisodeRunner:
         scenario: CognitiveScenario | str | None = None,
         scenario_kwargs: Dict[str, Any] | None = None,
         memory_filter_mode: str = "strict_same_scenario",
-        closure_profile: str = "baseline_fixed",
+        closure_profile: str = "level_aware",
     ):
         """Inicializa runner con escenario especificado.
 
@@ -54,7 +54,10 @@ class ScenarioEpisodeRunner:
             memory_filter_mode: Modo de filtrado de memoria por escenario
                 ('strict_same_scenario' o 'cross_scenario_analogical').
                 El alias 'analogical' se normaliza automáticamente.
-            closure_profile: Perfil de cierre a usar ('baseline_fixed' o 'adaptive_min').
+            closure_profile: Perfil de cierre a usar:
+                'baseline_fixed' — secuencia fija de 6 familias (Estrato I),
+                'adaptive_min' — selección adaptativa por features,
+                'level_aware' — escalado por nivel del mundo (1/2/3 estratos, default).
         """
         self.storage = storage or get_storage()
         self.run_id = run_id or f"run-{uuid4()}"
@@ -82,7 +85,7 @@ class ScenarioEpisodeRunner:
             )
         self.memory_filter_mode = memory_filter_mode
 
-        _VALID_CLOSURE_PROFILES = {"baseline_fixed", "adaptive_min"}
+        _VALID_CLOSURE_PROFILES = {"baseline_fixed", "adaptive_min", "level_aware"}
         if closure_profile not in _VALID_CLOSURE_PROFILES:
             raise ValueError(
                 f"closure_profile inválido: '{closure_profile}'. "
@@ -90,9 +93,16 @@ class ScenarioEpisodeRunner:
             )
         self.closure_profile = closure_profile
 
+        # Map closure_profile to scheduler mode
+        _PROFILE_TO_MODE = {
+            "baseline_fixed": "fixed",
+            "adaptive_min": "adaptive",
+            "level_aware": "level_aware",
+        }
+        scheduler_mode = _PROFILE_TO_MODE[closure_profile]
         self.smg = SMGMin(storage=self.storage, run_id=self.run_id)
         self.lotf = LOTFMin()
-        self.scheduler = MetaScheduler(trace_store=self.storage)
+        self.scheduler = MetaScheduler(trace_store=self.storage, mode=scheduler_mode)
         self.memory_retrieval = MemoryRetrieval(storage=self.storage)
         self.promotion_gate = PromotionGate(storage=self.storage)
         self.eml_mode = os.environ.get("RNFE_EML_MODE", "disabled").strip().lower()
@@ -180,6 +190,7 @@ class ScenarioEpisodeRunner:
         observation = self.scenario.observe()
         observation_dict = self.scenario.to_observation_dict(observation)
         observation_ref = self.smg.add_observation(observation_dict)
+        world_level = observation.level
 
         # 2. Crear signo principal
         main_proposition = self.scenario.get_main_proposition(observation)
@@ -266,6 +277,7 @@ class ScenarioEpisodeRunner:
             "observation": observation_dict,
             "intervention": intervention,
             "scenario": self.scenario.config.name,
+            "world_level": world_level,
         })
 
         # 10. Construir payload de episodio
@@ -281,6 +293,7 @@ class ScenarioEpisodeRunner:
             "scenario": self.scenario.config.name,
             "scenario_metadata": scenario_metadata,
             "closure_profile": self.closure_profile,
+            "world_level": world_level,
             "context": {
                 "observation": observation_dict,
                 "formula": formula,
