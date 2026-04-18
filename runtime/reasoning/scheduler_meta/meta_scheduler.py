@@ -20,6 +20,11 @@ from runtime.reasoning.scheduler_meta.policy import select_sequence
 from runtime.reasoning.scheduler_meta.policy import is_eml_experimental_enabled
 
 
+# Rango válido de niveles del mundo — alineado con los 3 estratos del SSOT.
+MIN_WORLD_LEVEL: int = 1
+MAX_WORLD_LEVEL: int = 3
+
+
 class MetaScheduler:
     """Implementación mínima y trazable del scheduler META."""
 
@@ -61,8 +66,8 @@ class MetaScheduler:
                 allow_experimental=allow_experimental,
             )
         elif self.mode == "level_aware":
-            world_level = int(state.get("world_level", 1))
-            world_level = max(1, min(3, world_level))
+            world_level = int(state.get("world_level", MIN_WORLD_LEVEL))
+            world_level = max(MIN_WORLD_LEVEL, min(MAX_WORLD_LEVEL, world_level))
             selected = list(self.LEVEL_SEQUENCES[world_level])
             scores = {fam: 1.0 for fam in selected}
             recommended = selected[-1] if selected else "prob"

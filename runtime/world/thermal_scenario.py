@@ -171,6 +171,10 @@ class ThermalScenario(CognitiveScenario):
 
         Returns:
             1 (NORMAL), 2 (WARNING) o 3 (CRITICAL).
+
+        Note:
+            ``warning_threshold=0.0`` deshabilita el nivel 2 — actúa como bandera
+            de habilitación ya que ningún valor normalizado útil es negativo.
         """
         if temperature >= self._alarm_threshold:
             return 3
