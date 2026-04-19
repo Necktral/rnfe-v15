@@ -99,13 +99,25 @@ class TestThermalScenario:
 
         assert obs_before.state["temperature"] == obs_after.state["temperature"]
 
-    def test_get_formula_returns_template(self):
-        """get_formula() retorna plantilla LOTF."""
-        scenario = ThermalScenario()
-        obs = scenario.observe()
-        formula = scenario.get_formula(obs)
-        assert "TEMP_HIGH" in formula
-        assert "ACTIVATE_COOLING" in formula
+    def test_get_formula_returns_level_appropriate_formula(self):
+        """get_formula() retorna fórmula LOTF según nivel del mundo."""
+        # Nivel 1 (NORMAL): temperature < 0.60
+        scenario_l1 = ThermalScenario(initial_temperature=0.50)
+        obs_l1 = scenario_l1.observe()
+        assert obs_l1.level == 1
+        assert scenario_l1.get_formula(obs_l1) == "TEMP_NORMAL -> KEEP_IDLE"
+
+        # Nivel 2 (WARNING): 0.60 <= temperature < 0.85
+        scenario_l2 = ThermalScenario(initial_temperature=0.70)
+        obs_l2 = scenario_l2.observe()
+        assert obs_l2.level == 2
+        assert "TEMP_WARNING" in scenario_l2.get_formula(obs_l2)
+
+        # Nivel 3 (CRITICAL): temperature >= 0.85
+        scenario_l3 = ThermalScenario(initial_temperature=0.90)
+        obs_l3 = scenario_l3.observe()
+        assert obs_l3.level == 3
+        assert "TEMP_HIGH" in scenario_l3.get_formula(obs_l3)
 
     def test_evaluate_relation_kind_support(self):
         """evaluate_relation_kind() retorna support cuando factual es mejor."""
@@ -178,14 +190,17 @@ class TestScenarioEpisodeRunner:
     """Tests para el runner de episodios con escenarios."""
 
     def test_runner_with_default_thermal_scenario(self, tmp_path: Path):
-        """Runner funciona con escenario térmico por defecto."""
+        """Runner con escenario térmico por defecto usa nivel 2 (advertencia) porque initial_temperature=0.82."""
         storage = _storage(tmp_path)
         runner = ScenarioEpisodeRunner(storage=storage, run_id="run-thermal-default")
         result = runner.run_episode(external_input=0.05)
 
         assert result["episode"]["scenario"] == "thermal_homeostasis"
+        # initial_temperature=0.82 está en nivel 2 (WARNING: 0.60-0.85)
+        # → Estrato I + Estrato II: ABD, ANA, CAU, CTF, DED, PROB, OPT, PLAN
+        assert result["episode"]["world_level"] == 2
         assert result["episode"]["result"]["reasoning_sequence"] == [
-            "ABD", "ANA", "CAU", "CTF", "DED", "PROB"
+            "ABD", "ANA", "CAU", "CTF", "DED", "PROB", "OPT", "PLAN"
         ]
         storage.close()
 
@@ -268,3 +283,124 @@ class TestScenarioEpisodeRunner:
         assert len(result2["episode"]["result"]["reasoning_sequence"]) >= 6
 
         storage.close()
+
+
+class TestThreeLevelWorld:
+    """Tests del mundo de tres niveles según estratos de razonamientos."""
+
+    def test_thermal_level_1_normal(self):
+        """Temperatura < 0.60 → nivel 1 (NORMAL), proposición TEMP_NORMAL."""
+        scenario = ThermalScenario(initial_temperature=0.40)
+        obs = scenario.observe()
+        assert obs.level == 1
+        assert "TEMP_NORMAL" in obs.propositions
+        assert obs.alarm is False
+
+    def test_thermal_level_2_warning(self):
+        """Temperatura en [0.60, 0.85) → nivel 2 (WARNING), proposición TEMP_WARNING."""
+        scenario = ThermalScenario(initial_temperature=0.72)
+        obs = scenario.observe()
+        assert obs.level == 2
+        assert "TEMP_WARNING" in obs.propositions
+        assert obs.alarm is False
+
+    def test_thermal_level_3_critical(self):
+        """Temperatura ≥ 0.85 → nivel 3 (CRITICAL), proposición TEMP_HIGH, alarm=True."""
+        scenario = ThermalScenario(initial_temperature=0.90)
+        obs = scenario.observe()
+        assert obs.level == 3
+        assert "TEMP_HIGH" in obs.propositions
+        assert obs.alarm is True
+
+    def test_thermal_level_2_activates_cooling_preemptively(self):
+        """Nivel 2 (WARNING) activa enfriamiento preventivo."""
+        scenario = ThermalScenario(initial_temperature=0.70)
+        obs = scenario.observe()
+        assert obs.level == 2
+        intervention = scenario.select_intervention(obs)
+        assert intervention == "activate_cooling"
+
+    def test_thermal_level_1_keeps_idle(self):
+        """Nivel 1 (NORMAL) mantiene sistema inactivo."""
+        scenario = ThermalScenario(initial_temperature=0.40)
+        obs = scenario.observe()
+        assert obs.level == 1
+        intervention = scenario.select_intervention(obs)
+        assert intervention == "deactivate_cooling"
+
+    def test_resource_level_1_adequate(self):
+        """Stock > 0.40 → nivel 1 (ADEQUATE), proposición STOCK_ADEQUATE."""
+        scenario = ResourceScenario(initial_stock=0.60)
+        obs = scenario.observe()
+        assert obs.level == 1
+        assert "STOCK_ADEQUATE" in obs.propositions
+        assert obs.alarm is False
+
+    def test_resource_level_2_low(self):
+        """Stock en (0.20, 0.40] → nivel 2 (LOW), proposición STOCK_LOW."""
+        scenario = ResourceScenario(initial_stock=0.30)
+        obs = scenario.observe()
+        assert obs.level == 2
+        assert "STOCK_LOW" in obs.propositions
+        assert obs.alarm is False
+
+    def test_resource_level_3_critical(self):
+        """Stock ≤ 0.20 → nivel 3 (CRITICAL), proposición STOCK_CRITICAL, alarm=True."""
+        scenario = ResourceScenario(initial_stock=0.15)
+        obs = scenario.observe()
+        assert obs.level == 3
+        assert "STOCK_CRITICAL" in obs.propositions
+        assert obs.alarm is True
+
+    def test_resource_level_2_starts_production_preemptively(self):
+        """Nivel 2 (LOW) inicia producción preventiva."""
+        scenario = ResourceScenario(initial_stock=0.30)
+        obs = scenario.observe()
+        assert obs.level == 2
+        intervention = scenario.select_intervention(obs)
+        assert intervention == "start_production"
+
+    def test_resource_level_1_stops_production(self):
+        """Nivel 1 (ADEQUATE) detiene producción."""
+        scenario = ResourceScenario(initial_stock=0.60)
+        obs = scenario.observe()
+        assert obs.level == 1
+        intervention = scenario.select_intervention(obs)
+        assert intervention == "stop_production"
+
+    def test_scheduler_escalates_families_by_level(self):
+        """MetaScheduler en modo level_aware escala familias según world_level."""
+        from runtime.reasoning.scheduler_meta.meta_scheduler import MetaScheduler
+
+        scheduler = MetaScheduler(mode="level_aware")
+
+        # Nivel 1: solo Estrato I (6 familias)
+        result_l1 = scheduler.run({"world_level": 1})
+        assert result_l1["sequence"] == ["ABD", "ANA", "CAU", "CTF", "DED", "PROB"]
+
+        # Nivel 2: Estrato I + II (8 familias)
+        result_l2 = scheduler.run({"world_level": 2})
+        assert result_l2["sequence"] == [
+            "ABD", "ANA", "CAU", "CTF", "DED", "PROB", "OPT", "PLAN"
+        ]
+
+        # Nivel 3: Todos los estratos (11 familias)
+        result_l3 = scheduler.run({"world_level": 3})
+        assert result_l3["sequence"] == [
+            "ABD", "ANA", "CAU", "CTF", "DED", "PROB",
+            "OPT", "PLAN", "DIA_ADV", "FAL_GUARD", "HEUR"
+        ]
+
+    def test_scheduler_clamps_invalid_world_level(self):
+        """MetaScheduler clampea niveles fuera de rango a [1, 3]."""
+        from runtime.reasoning.scheduler_meta.meta_scheduler import MetaScheduler
+
+        scheduler = MetaScheduler(mode="level_aware")
+
+        # Nivel 0 → se clampea a 1
+        result = scheduler.run({"world_level": 0})
+        assert len(result["sequence"]) == 6
+
+        # Nivel 5 → se clampea a 3
+        result = scheduler.run({"world_level": 5})
+        assert len(result["sequence"]) == 11
