@@ -10,6 +10,7 @@ import statistics
 import subprocess
 import sys
 import textwrap
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,90 @@ FRACTAL_ONLY_SUITE = (
 )
 
 SEEDS = [101, 202, 303, 404, 505]
+
+
+class ProgressReporter:
+    """Barra de progreso con backend tqdm o fallback ASCII/log."""
+
+    def __init__(self) -> None:
+        self.total = 0
+        self.current = 0
+        self.desc = ''
+        self._start_ts = 0.0
+        self._is_tty = bool(getattr(sys.stderr, 'isatty', lambda: False)())
+        self._last_line_len = 0
+        self._tqdm = None
+        self._tqdm_cls = None
+        if self._is_tty:
+            try:
+                from tqdm import tqdm as tqdm_cls  # type: ignore
+            except Exception:
+                self._tqdm_cls = None
+            else:
+                self._tqdm_cls = tqdm_cls
+
+    def start(self, total: int, desc: str) -> None:
+        self.total = max(1, int(total))
+        self.current = 0
+        self.desc = desc
+        self._start_ts = time.monotonic()
+        if self._tqdm_cls is not None:
+            self._tqdm = self._tqdm_cls(
+                total=self.total,
+                desc=self.desc,
+                unit='task',
+                dynamic_ncols=True,
+                file=sys.stderr,
+                leave=True,
+            )
+        else:
+            self._render_fallback('inicio')
+
+    def _format_eta(self) -> str:
+        if self.current <= 0:
+            return 'eta=--'
+        elapsed = max(0.0, time.monotonic() - self._start_ts)
+        per_item = elapsed / float(self.current)
+        remaining = max(0.0, (self.total - self.current) * per_item)
+        return f'eta={remaining:0.1f}s'
+
+    def _render_fallback(self, label: str) -> None:
+        pct = (100.0 * self.current) / float(self.total) if self.total else 0.0
+        suffix = f' | {label}' if label else ''
+        line = (
+            f"[{pct:6.2f}%] {self.current:>3}/{self.total:<3} "
+            f"{self.desc}{suffix} | {self._format_eta()}"
+        )
+        if self._is_tty:
+            pad = max(0, self._last_line_len - len(line))
+            sys.stderr.write('\r' + line + (' ' * pad))
+            sys.stderr.flush()
+            self._last_line_len = len(line)
+            return
+        print(line, file=sys.stderr, flush=True)
+
+    def advance(self, n: int, label: str = '') -> None:
+        step = max(0, int(n))
+        self.current = min(self.total, self.current + step)
+        if self._tqdm is not None:
+            if label:
+                self._tqdm.set_postfix_str(label, refresh=False)
+            self._tqdm.update(step)
+            return
+        self._render_fallback(label)
+
+    def close(self) -> None:
+        if self._tqdm is not None:
+            self._tqdm.close()
+            self._tqdm = None
+            return
+        if self.total > 0 and self.current < self.total:
+            self.current = self.total
+            self._render_fallback('final')
+        if self._is_tty:
+            sys.stderr.write('\n')
+            sys.stderr.flush()
+            self._last_line_len = 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -550,13 +635,19 @@ def main() -> int:
         }
         bdir = OUT_DIR / 'fractal' / 'bench'
         bdir.mkdir(parents=True, exist_ok=True)
-        for seed in SEEDS:
-            result = run_timed_python(
-                workload_w3_code(seed),
-                ROOTS['fractal'],
-                bdir / f'W3_seed{seed}.log',
-            )
-            report['benchmarks']['fractal']['W3'].append(result)
+        progress = ProgressReporter()
+        progress.start(total=len(SEEDS), desc='mode=w3')
+        try:
+            for seed in SEEDS:
+                result = run_timed_python(
+                    workload_w3_code(seed),
+                    ROOTS['fractal'],
+                    bdir / f'W3_seed{seed}.log',
+                )
+                report['benchmarks']['fractal']['W3'].append(result)
+                progress.advance(1, f'bench:fractal/W3/seed={seed}')
+        finally:
+            progress.close()
 
         summary = summarize_repeats(report['benchmarks']['fractal']['W3'])
         ok_runs = int(summary.get('ok_runs', 0))
@@ -606,46 +697,57 @@ def main() -> int:
         'benchmarks': {},
         'analysis': {},
     }
+    full_total_steps = 2 + 5 + (len(SEEDS) * 5)  # 32 con SEEDS=5.
+    progress = ProgressReporter()
+    progress.start(total=full_total_steps, desc='mode=full')
+    try:
+        for root_name, root_dir in ROOTS.items():
+            report['preflight'][root_name] = run_preflight(root_name, root_dir)
+            progress.advance(1, f'preflight:{root_name}')
 
-    for root_name, root_dir in ROOTS.items():
-        report['preflight'][root_name] = run_preflight(root_name, root_dir)
+        for root_name, root_dir in ROOTS.items():
+            report['suites'][root_name] = {}
+            for suite_name, tests_expr in COMMON_SUITES.items():
+                report['suites'][root_name][suite_name] = run_suite(root_name, root_dir, suite_name, tests_expr)
+                progress.advance(1, f'suite:{root_name}/{suite_name}')
 
-    for root_name, root_dir in ROOTS.items():
-        report['suites'][root_name] = {}
-        for suite_name, tests_expr in COMMON_SUITES.items():
-            report['suites'][root_name][suite_name] = run_suite(root_name, root_dir, suite_name, tests_expr)
-
-    report['suites']['fractal']['fractal_only'] = run_suite(
-        'fractal',
-        ROOTS['fractal'],
-        'fractal_only',
-        FRACTAL_ONLY_SUITE,
-    )
-    report['suites']['baseline']['fractal_only'] = {
-        'suite': 'fractal_only',
-        'status': 'N/A (not present in baseline local)',
-    }
-
-    for root_name, root_dir in ROOTS.items():
-        bdir = OUT_DIR / root_name / 'bench'
-        bdir.mkdir(parents=True, exist_ok=True)
-        report['benchmarks'][root_name] = {'W1': [], 'W2': [], 'W3': []}
-        for seed in SEEDS:
-            report['benchmarks'][root_name]['W1'].append(
-                run_timed_python(workload_w1_code(seed), root_dir, bdir / f'W1_seed{seed}.log')
-            )
-            report['benchmarks'][root_name]['W2'].append(
-                run_timed_python(workload_w2_code(seed), root_dir, bdir / f'W2_seed{seed}.log')
-            )
-
-    for seed in SEEDS:
-        report['benchmarks']['fractal']['W3'].append(
-            run_timed_python(
-                workload_w3_code(seed),
-                ROOTS['fractal'],
-                OUT_DIR / 'fractal' / 'bench' / f'W3_seed{seed}.log',
-            )
+        report['suites']['fractal']['fractal_only'] = run_suite(
+            'fractal',
+            ROOTS['fractal'],
+            'fractal_only',
+            FRACTAL_ONLY_SUITE,
         )
+        progress.advance(1, 'suite:fractal/fractal_only')
+        report['suites']['baseline']['fractal_only'] = {
+            'suite': 'fractal_only',
+            'status': 'N/A (not present in baseline local)',
+        }
+
+        for root_name, root_dir in ROOTS.items():
+            bdir = OUT_DIR / root_name / 'bench'
+            bdir.mkdir(parents=True, exist_ok=True)
+            report['benchmarks'][root_name] = {'W1': [], 'W2': [], 'W3': []}
+            for seed in SEEDS:
+                report['benchmarks'][root_name]['W1'].append(
+                    run_timed_python(workload_w1_code(seed), root_dir, bdir / f'W1_seed{seed}.log')
+                )
+                progress.advance(1, f'bench:{root_name}/W1/seed={seed}')
+                report['benchmarks'][root_name]['W2'].append(
+                    run_timed_python(workload_w2_code(seed), root_dir, bdir / f'W2_seed{seed}.log')
+                )
+                progress.advance(1, f'bench:{root_name}/W2/seed={seed}')
+
+        for seed in SEEDS:
+            report['benchmarks']['fractal']['W3'].append(
+                run_timed_python(
+                    workload_w3_code(seed),
+                    ROOTS['fractal'],
+                    OUT_DIR / 'fractal' / 'bench' / f'W3_seed{seed}.log',
+                )
+            )
+            progress.advance(1, f'bench:fractal/W3/seed={seed}')
+    finally:
+        progress.close()
 
     report['benchmarks']['baseline']['W3'] = [{'status': 'N/A (fractal workload only)'}]
 

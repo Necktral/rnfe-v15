@@ -4,7 +4,7 @@
 
 This checklist provides a step-by-step execution plan for integrating and validating the complete fractal testing infrastructure for the dynamic reasoning scheduler.
 
-**Status**: Production-ready infrastructure, execution validation in progress
+**Status**: Execution completed for A/B/C gates (with blocking findings in fractal path)
 **Date**: 2026-04-18
 **Estimated Total Time**: 5-10 minutes for complete suite
 
@@ -39,7 +39,7 @@ This checklist provides a step-by-step execution plan for integrating and valida
 
 **Objective**: Establish baseline behavior before fractal layer
 
-**Status**: ⏸️ Pending execution
+**Status**: ✅ Executed and stable (baseline)
 
 ### Execution Steps
 
@@ -85,15 +85,15 @@ This checklist provides a step-by-step execution plan for integrating and valida
 
 ### Results Summary
 
-**Tests Passed**: ___ / 5
-**Tests Failed**: ___ / 5
-**Pre-existing Issues**: ___
-**Baseline Established**: ⏸️ Pending
+**Tests Passed**: 5 / 5 modules (54 tests)
+**Tests Failed**: 0 / 5 modules
+**Pre-existing Issues**: none in baseline
+**Baseline Established**: ✅ Yes
 
 **Exit Criteria**:
-- [ ] All 5 traditional tests executed
-- [ ] Results documented (pass/fail/pre-existing)
-- [ ] Baseline metrics recorded for comparison
+- [x] All 5 traditional tests executed
+- [x] Results documented (pass/fail/pre-existing)
+- [x] Baseline metrics recorded for comparison
 
 ---
 
@@ -101,7 +101,7 @@ This checklist provides a step-by-step execution plan for integrating and valida
 
 **Objective**: Execute fractal characterization of scheduler
 
-**Status**: ⏸️ Pending execution
+**Status**: ⚠️ Executed with blocking findings
 
 ### Execution Steps
 
@@ -151,18 +151,18 @@ This checklist provides a step-by-step execution plan for integrating and valida
 
 ### Results Summary
 
-**Tests Passed**: ___ / 5
+**Tests Passed**: 0 / 5 modules without failures (86 tests total; 52 pass, 34 fail)
 **Fractal Metrics**:
-- Convergence rate: ___
-- Roughness exponent: ___
-- Fractal dimension: ___
-- Scale error: ___
-- Avalanche criticality: ___
-- **System Classification**: ___
+- Convergence rate: outside expected ranges in multiscale checks
+- Roughness exponent: high / pathological in failing boundary tests
+- Fractal dimension: multiple out-of-range assertions (catalog + box counting)
+- Scale error: above threshold in temporal cascade
+- Avalanche criticality: failing discipline/rigidity checks
+- **System Classification**: pathological (observed from assertions)
 
 **Exit Criteria**:
-- [ ] All 5 fractal tests executed
-- [ ] First fractal discipline classification obtained
+- [x] All 5 fractal tests executed
+- [x] First fractal discipline classification obtained
 - [ ] No blocking infrastructure issues encountered
 
 ---
@@ -171,7 +171,7 @@ This checklist provides a step-by-step execution plan for integrating and valida
 
 **Objective**: Test scheduler against 12 fractal families × 9 functionalities
 
-**Status**: ⏸️ Pending execution
+**Status**: ⚠️ Executed with partial pass (bridge not accepted)
 
 ### Execution Steps
 
@@ -204,10 +204,10 @@ Critical mappings verified:
 
 ### Results Summary
 
-**Families Validated**: ___ / 12
-**Geometries Generated**: ___ / 17
-**Scheduler Integrations**: ___ / ___
-**Mapping Bridge Status**: ___
+**Families Validated**: partial (test suite not accepted)
+**Geometries Generated**: partial (geometry catalog failures present)
+**Scheduler Integrations**: 20 pass / 34 total tests across `geometry_catalog` + `experiment2_atlas`
+**Mapping Bridge Status**: ⚠️ Executed but not passing gate
 
 **Exit Criteria**:
 - [ ] All 12 families generate valid scheduler features
@@ -432,10 +432,10 @@ Configuration tasks:
 
 ### Overall Progress
 
-**Phases Complete**: ___ / 6
+**Phases Complete**: 2 / 7
 
-- [ ] Phase 0: Scope Freeze
-- [ ] Phase 1: Baseline Validation
+- [x] Phase 0: Scope Freeze
+- [x] Phase 1: Baseline Validation
 - [ ] Phase 2: Fractal Suite Activation
 - [ ] Phase 3: Geometric Catalog Integration
 - [ ] Phase 4: Persistent Atlas Generation
@@ -445,37 +445,37 @@ Configuration tasks:
 ### Key Deliverables
 
 1. Traditional stress suite baseline
-   - Status: ___
-   - Result: ___
+   - Status: ✅ Complete
+   - Result: baseline stable (92/92 pass in full run common suites)
 
 2. Fractal stress suite operational
-   - Status: ___
-   - Classification: ___
+   - Status: ⚠️ Executed with failures
+   - Classification: pathological / no eficiente
 
 3. Geometric catalog (12×9) connected
-   - Status: ___
-   - Families validated: ___ / 12
+   - Status: ⚠️ Partial (not gate-ready)
+   - Families validated: not accepted (14 failures in `test_geometry_catalog`)
 
 4. Persistent atlas artifacts
-   - Status: ___
-   - Artifacts: ___ / 6
+   - Status: ⏸️ Pending dedicated generation gate
+   - Artifacts: N/D in this execution
 
 5. Merge criteria defined
-   - Status: ___
-   - Decision: ___
+   - Status: ✅ Evaluated by benchmark gate
+   - Decision: ❌ No merge gate (efficiency verdict `No eficiente`)
 
 6. CI multi-tier strategy
-   - Status: ___
-   - Tiers configured: ___ / 3
+   - Status: ⏸️ Pending
+   - Tiers configured: 0 / 3
 
 ### System Classification
 
-**Final Scheduler Characterization**: ___
+**Final Scheduler Characterization**: Pathological under fractal integration gate (2026-04-18 run)
 
-- Disciplined: ✅ / ❌
-- Critical: ✅ / ❌
-- Fragile: ✅ / ❌
-- Pathological: ✅ / ❌
+- Disciplined: ❌
+- Critical: ❌
+- Fragile: ❌
+- Pathological: ✅
 
 ### Next Actions
 
@@ -497,22 +497,25 @@ If Fragile/Pathological:
 
 ### Session 1: 2026-04-18
 
-**Executor**: ___
-**Time Started**: ___
-**Time Completed**: ___
+**Executor**: Codex + user
+**Time Started**: ~22:58
+**Time Completed**: ~23:29
 
 **Phases Executed**:
-- Phase 0: ___
-- Phase 1: ___
-- Phase 2: ___
-- Phase 3: ___
-- Phase 4: ___
-- Phase 5: ___
-- Phase 6: ___
+- Phase 0: complete (preexisting)
+- Phase 1: complete (baseline validated)
+- Phase 2: executed with blocking findings
+- Phase 3: executed with partial pass / blocking findings
+- Phase 4: not executed in this session
+- Phase 5: decision recorded (`No eficiente`)
+- Phase 6: not executed in this session
 
-**Issues Encountered**: ___
+**Issues Encountered**:
+- Fractal common stress regression: 14 failed + 1 error
+- `test_interaction_grid` fixture/setup error in fractal path
+- Fractal-only suite: 48 failed / 120 total
 
-**Final Status**: ___
+**Final Status**: Executed with findings; baseline green, fractal gate red
 
 ---
 
@@ -561,6 +564,6 @@ pytest tests/reasoning_stress/ -v
 
 ---
 
-**Document Version**: 1.0
+**Document Version**: 1.1
 **Last Updated**: 2026-04-18
-**Status**: Ready for execution
+**Status**: Executed with findings
