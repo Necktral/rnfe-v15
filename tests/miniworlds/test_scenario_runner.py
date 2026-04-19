@@ -190,17 +190,16 @@ class TestScenarioEpisodeRunner:
     """Tests para el runner de episodios con escenarios."""
 
     def test_runner_with_default_thermal_scenario(self, tmp_path: Path):
-        """Runner con escenario térmico por defecto usa nivel 2 (advertencia) porque initial_temperature=0.82."""
+        """Runner con escenario térmico por defecto usa baseline_fixed (6 familias Estrato I)."""
         storage = _storage(tmp_path)
         runner = ScenarioEpisodeRunner(storage=storage, run_id="run-thermal-default")
         result = runner.run_episode(external_input=0.05)
 
         assert result["episode"]["scenario"] == "thermal_homeostasis"
-        # initial_temperature=0.82 está en nivel 2 (WARNING: 0.60-0.85)
-        # → Estrato I + Estrato II: ABD, ANA, CAU, CTF, DED, PROB, OPT, PLAN
-        assert result["episode"]["world_level"] == 2
+        # Default closure_profile=baseline_fixed → canonical 6-family Stratum I sequence
+        assert result["episode"]["closure_profile"] == "baseline_fixed"
         assert result["episode"]["result"]["reasoning_sequence"] == [
-            "ABD", "ANA", "CAU", "CTF", "DED", "PROB", "OPT", "PLAN"
+            "ABD", "ANA", "CAU", "CTF", "DED", "PROB"
         ]
         storage.close()
 

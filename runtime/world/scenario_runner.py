@@ -42,7 +42,7 @@ class ScenarioEpisodeRunner:
         scenario: CognitiveScenario | str | None = None,
         scenario_kwargs: Dict[str, Any] | None = None,
         memory_filter_mode: str = "strict_same_scenario",
-        closure_profile: str = "level_aware",
+        closure_profile: str = "baseline_fixed",
     ):
         """Inicializa runner con escenario especificado.
 
@@ -55,9 +55,9 @@ class ScenarioEpisodeRunner:
                 ('strict_same_scenario' o 'cross_scenario_analogical').
                 El alias 'analogical' se normaliza automáticamente.
             closure_profile: Perfil de cierre a usar:
-                'baseline_fixed' — secuencia fija de 6 familias (Estrato I),
+                'baseline_fixed' — secuencia fija de 6 familias (Estrato I, default),
                 'adaptive_min' — selección adaptativa por features,
-                'level_aware' — escalado por nivel del mundo (1/2/3 estratos, default).
+                'level_aware' — escalado por nivel del mundo (1/2/3 estratos, experimental).
         """
         self.storage = storage or get_storage()
         self.run_id = run_id or f"run-{uuid4()}"

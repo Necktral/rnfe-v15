@@ -39,19 +39,18 @@ class TestRunnerParityThermal:
         )
         res_scenario = scenario.run_episode(external_input=0.05)
 
-        # Legacy runner always uses fixed 6-family Stratum I sequence
+        # Both should have valid reasoning sequences
+        # Default is baseline_fixed → same canonical 6-family sequence
         assert res_legacy["episode"]["result"]["reasoning_sequence"] == [
             "ABD", "ANA", "CAU", "CTF", "DED", "PROB",
         ]
-        # Scenario runner defaults to level_aware.
-        # initial_temperature=0.82 → level 2 (WARNING) → Stratum I + Stratum II
         assert res_scenario["episode"]["result"]["reasoning_sequence"] == [
-            "ABD", "ANA", "CAU", "CTF", "DED", "PROB", "OPT", "PLAN",
+            "ABD", "ANA", "CAU", "CTF", "DED", "PROB",
         ]
         storage.close()
 
     def test_both_runners_produce_comparable_traces(self, tmp_path: Path):
-        """Both runners produce traces with at least the core Stratum I families."""
+        """Both runners produce traces of equal length."""
         storage = _storage(tmp_path)
 
         legacy = MinimalCognitiveEpisodeRunner(storage=storage, run_id="run-parity-trace-l")
@@ -66,9 +65,8 @@ class TestRunnerParityThermal:
         trace_legacy = res_legacy["episode"]["trace"]
         trace_scenario = res_scenario["episode"]["trace"]
 
-        # Legacy: 6 families (fixed); scenario: ≥6 families (level_aware escalates)
-        assert len(trace_legacy) >= 6
-        assert len(trace_scenario) >= 6
+        # Default is baseline_fixed → same trace length as legacy
+        assert len(trace_legacy) == len(trace_scenario)
         storage.close()
 
     def test_both_runners_materialize_artifact(self, tmp_path: Path):
@@ -168,4 +166,86 @@ class TestRunnerParityThermal:
         assert res["episode"]["closure_profile"] == "adaptive_min"
         valid_verdicts = {"certified", "PASSED", "CONDITIONALLY_PASSED"}
         assert res["certification"]["verdict"] in valid_verdicts
+        storage.close()
+
+
+class TestLevelAwareExperimental:
+    """Tests for level_aware closure profile — experimental, not default.
+
+    These tests validate that level_aware works correctly when explicitly
+    requested, but are separate from historical parity to avoid confusion.
+    """
+
+    def test_level_aware_escalates_for_warning_temperature(self, tmp_path: Path):
+        """level_aware with initial_temperature=0.82 (level 2) produces Stratum I + II."""
+        storage = _storage(tmp_path)
+        runner = ScenarioEpisodeRunner(
+            storage=storage,
+            run_id="run-la-warning",
+            scenario="thermal_homeostasis",
+            closure_profile="level_aware",
+        )
+        result = runner.run_episode(external_input=0.05)
+
+        assert result["episode"]["closure_profile"] == "level_aware"
+        assert result["episode"]["world_level"] == 2
+        assert result["episode"]["result"]["reasoning_sequence"] == [
+            "ABD", "ANA", "CAU", "CTF", "DED", "PROB", "OPT", "PLAN",
+        ]
+        storage.close()
+
+    def test_level_aware_produces_valid_certification(self, tmp_path: Path):
+        """level_aware still passes certification."""
+        storage = _storage(tmp_path)
+        runner = ScenarioEpisodeRunner(
+            storage=storage,
+            run_id="run-la-cert",
+            scenario="thermal_homeostasis",
+            closure_profile="level_aware",
+        )
+        result = runner.run_episode(external_input=0.04)
+
+        valid_verdicts = {"certified", "PASSED", "CONDITIONALLY_PASSED"}
+        assert result["certification"]["verdict"] in valid_verdicts
+        storage.close()
+
+    def test_level_aware_includes_more_families_than_baseline(self, tmp_path: Path):
+        """level_aware at level 2 includes more families than baseline_fixed."""
+        storage = _storage(tmp_path)
+
+        runner_base = ScenarioEpisodeRunner(
+            storage=storage,
+            run_id="run-la-base",
+            scenario="thermal_homeostasis",
+            closure_profile="baseline_fixed",
+        )
+        res_base = runner_base.run_episode(external_input=0.04)
+
+        runner_la = ScenarioEpisodeRunner(
+            storage=storage,
+            run_id="run-la-level",
+            scenario="thermal_homeostasis",
+            closure_profile="level_aware",
+        )
+        res_la = runner_la.run_episode(external_input=0.04)
+
+        seq_base = res_base["episode"]["result"]["reasoning_sequence"]
+        seq_la = res_la["episode"]["result"]["reasoning_sequence"]
+
+        # baseline_fixed: 6 families, level_aware at level 2: 8 families
+        assert len(seq_base) == 6
+        assert len(seq_la) == 8
+        # level_aware includes all baseline families plus extras
+        assert seq_la[:6] == seq_base
+        storage.close()
+
+    def test_level_aware_is_not_the_default(self, tmp_path: Path):
+        """Verify level_aware must be explicitly requested — default is baseline_fixed."""
+        storage = _storage(tmp_path)
+        runner = ScenarioEpisodeRunner(
+            storage=storage,
+            run_id="run-la-default-check",
+            scenario="thermal_homeostasis",
+        )
+        assert runner.closure_profile == "baseline_fixed"
         storage.close()

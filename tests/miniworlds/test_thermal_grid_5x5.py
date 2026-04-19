@@ -487,6 +487,7 @@ class TestGridEpisodeRunner:
             storage=storage,
             run_id="run-grid-level3",
             scenario=scenario,
+            closure_profile="level_aware",
         )
         result = runner.run_episode(external_input=0.02)
 
