@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .compatibility import ScenarioStructuralProfile
@@ -59,6 +59,8 @@ class ScenarioConfig:
         type_context: Contexto de tipos para checker LOTF.
         warning_threshold: Umbral de advertencia (límite nivel 1→2).
             Valor 0.0 deshabilita el nivel de advertencia.
+        world_shape: Dimensiones espaciales del mundo como tupla (rows, cols).
+            ``None`` indica un mundo escalar (1x1 efectivo).
     """
 
     name: str
@@ -69,6 +71,7 @@ class ScenarioConfig:
     formula_template: str
     type_context: Dict[str, str]
     warning_threshold: float = 0.0
+    world_shape: Optional[Tuple[int, int]] = None
 
 
 class CognitiveScenario(ABC):

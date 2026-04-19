@@ -37,6 +37,7 @@ from .scenario import (
 )
 from .thermal_scenario import ThermalScenario, create_thermal_scenario
 from .resource_scenario import ResourceScenario, create_resource_scenario
+from .thermal_grid_scenario import ThermalGrid5x5Scenario, create_thermal_grid_5x5
 from .registry import (
     SCENARIO_REGISTRY,
     DEFAULT_SCENARIO,
@@ -83,8 +84,10 @@ __all__ = [
     # Scenarios
     "ThermalScenario",
     "ResourceScenario",
+    "ThermalGrid5x5Scenario",
     "create_thermal_scenario",
     "create_resource_scenario",
+    "create_thermal_grid_5x5",
     # Registry
     "SCENARIO_REGISTRY",
     "DEFAULT_SCENARIO",

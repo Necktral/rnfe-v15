@@ -9,17 +9,20 @@ from .causal_signature import ScenarioCausalSignature
 from .scenario import CognitiveScenario, ScenarioConfig
 from .thermal_scenario import ThermalScenario
 from .resource_scenario import ResourceScenario
+from .thermal_grid_scenario import ThermalGrid5x5Scenario
 
 
 # Registro de escenarios disponibles
 SCENARIO_REGISTRY: Dict[str, Type[CognitiveScenario]] = {
     "thermal_homeostasis": ThermalScenario,
     "resource_management": ResourceScenario,
+    "thermal_grid_5x5": ThermalGrid5x5Scenario,
 }
 
 # Alias no canónicos (compatibilidad externa)
 SCENARIO_ALIASES: Dict[str, str] = {
     "thermal": "thermal_homeostasis",
+    "grid_5x5": "thermal_grid_5x5",
 }
 
 # Escenario por defecto (baseline)
