@@ -180,6 +180,10 @@ def evaluate_interaction_grid(
     return result
 
 
+# Alias de compatibilidad para reportes/documentación antiguos.
+interaction_grid = evaluate_interaction_grid
+
+
 # ============================================================================
 # CONTRADICTION × EDGE_PRESSURE INTERACTION
 # ============================================================================

@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 import numpy as np
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -61,61 +62,134 @@ def map_geometry_to_scheduler_features(
     This is the key bridge: we convert geometric fractal properties
     into the continuous feature signals that the scheduler uses.
     """
-    # Normalize points to [0, 1]
-    if len(geometry_points) > 0:
-        points_min = geometry_points.min(axis=0)
-        points_max = geometry_points.max(axis=0)
-        points_range = points_max - points_min
-        points_range[points_range == 0] = 1.0
-        normalized_points = (geometry_points - points_min) / points_range
+    def _clip01(value: float) -> float:
+        return float(min(1.0, max(0.0, value)))
+
+    def _as_points(points: np.ndarray) -> np.ndarray:
+        arr = np.asarray(points, dtype=float)
+        if arr.size == 0:
+            return np.zeros((0, 2), dtype=float)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        if arr.ndim > 2:
+            arr = arr.reshape(arr.shape[0], -1)
+        finite_mask = np.isfinite(arr).all(axis=1)
+        arr = arr[finite_mask]
+        if len(arr) == 0:
+            return np.zeros((0, 2), dtype=float)
+        if arr.shape[1] == 1:
+            arr = np.column_stack(
+                [np.linspace(0.0, 1.0, len(arr), endpoint=True), arr[:, 0]]
+            )
+        return arr
+
+    points = _as_points(geometry_points)
+    n_points = len(points)
+    if n_points == 0:
+        return {
+            "uncertainty": 0.25,
+            "contradiction_signal": 0.1,
+            "continuity_recent": _clip01(meta_params.spectral_margin_min),
+            "edge_pressure": _clip01(meta_params.lambda_rig),
+            "causal_risk": _clip01(meta_params.lambda_fractal),
+            "symbolic_regularity": 0.3,
+            "law_fit_signal": 0.3,
+        }
+
+    points_min = points.min(axis=0)
+    points_max = points.max(axis=0)
+    points_range = points_max - points_min
+    points_range[points_range < 1e-12] = 1.0
+    normalized = (points - points_min) / points_range
+    normalized = np.clip(normalized, 0.0, 1.0)
+
+    dims = normalized.shape[1]
+    fd_norm = _clip01((fractal_dimension - 1.0) / max(1.0, min(3.0, float(dims)) - 0.5))
+
+    # Complejidad espacial por entropía de ocupación (determinista, multiescala).
+    occupancy_entropies: List[float] = []
+    heterogeneity_scores: List[float] = []
+    box_counts: List[float] = []
+    log_eps: List[float] = []
+    for eps in (0.25, 0.125, 0.0625):
+        scaled = np.minimum(normalized, 1.0 - 1e-12)
+        idx = np.floor(scaled / eps).astype(np.int64)
+        uniq, counts = np.unique(idx, axis=0, return_counts=True)
+        del uniq
+        probs = counts / max(1.0, float(np.sum(counts)))
+        entropy = -np.sum(probs * np.log(probs + 1e-12))
+        max_entropy = math.log(max(2, len(probs)))
+        entropy_norm = entropy / max(1e-9, max_entropy)
+        occupancy_entropies.append(_clip01(entropy_norm))
+
+        mean_count = float(np.mean(counts))
+        cv = float(np.std(counts) / (mean_count + 1e-9))
+        heterogeneity_scores.append(_clip01(cv / 1.8))
+
+        box_counts.append(float(len(counts)))
+        log_eps.append(math.log(1.0 / eps))
+
+    mean_entropy = float(np.mean(occupancy_entropies))
+    uncertainty = _clip01(0.65 * fd_norm + 0.35 * mean_entropy)
+
+    # Contradicción como heterogeneidad multiescala + anisotropía geométrica.
+    cov = np.cov(normalized, rowvar=False)
+    if np.isscalar(cov):
+        eigvals = np.array([float(cov)])
     else:
-        normalized_points = geometry_points
+        eigvals = np.linalg.eigvalsh(np.atleast_2d(cov))
+    eigvals = np.clip(eigvals, 0.0, None)
+    anisotropy = 0.0
+    if len(eigvals) >= 2:
+        anisotropy = 1.0 - (float(np.min(eigvals)) / (float(np.max(eigvals)) + 1e-9))
+    contradiction_signal = _clip01(0.75 * float(np.mean(heterogeneity_scores)) + 0.25 * anisotropy)
 
-    # Compute density and complexity metrics
-    n_points = len(normalized_points)
+    # Edge pressure modulado por concentración en frontera (sin romper baseline de lambda_rig).
+    boundary_mask = np.any((normalized < 0.05) | (normalized > 0.95), axis=1)
+    boundary_density = float(np.mean(boundary_mask)) if n_points > 0 else 0.0
+    edge_pressure = _clip01((0.8 * meta_params.lambda_rig) + (0.2 * boundary_density))
 
-    # Map fractal dimension to uncertainty
-    # Higher D_F -> more complex structure -> higher uncertainty
-    uncertainty = min(1.0, max(0.0, (fractal_dimension - 1.0) / 2.0))
+    # Riesgo causal: jerarquía/ramificación efectiva + regularización fractal.
+    hierarchy_depth = _clip01(math.log1p(float(n_points)) / math.log(4096.0))
+    nn_delta = np.linalg.norm(np.diff(normalized, axis=0), axis=1) if n_points > 1 else np.array([1.0])
+    nn_delta_mean = float(np.mean(nn_delta))
+    nn_compaction = _clip01(1.0 - (nn_delta_mean / (math.sqrt(max(1, dims)) + 1e-9)))
+    causal_risk = _clip01(
+        (0.45 * meta_params.lambda_fractal)
+        + (0.35 * hierarchy_depth)
+        + (0.20 * nn_compaction)
+    )
 
-    # Map point density variation to contradiction_signal
-    if n_points > 100:
-        # Sample local densities
-        sample_indices = np.random.choice(n_points, min(100, n_points), replace=False)
-        local_densities = []
+    # Regularidad simbólica separada de law_fit.
+    nn_delta_std = float(np.std(nn_delta))
+    nn_delta_cv = nn_delta_std / (nn_delta_mean + 1e-9)
+    distance_regularity = _clip01(1.0 - min(1.0, nn_delta_cv))
+    target_alignment = _clip01(1.0 - abs(fractal_dimension - meta_params.target_dimension))
+    symbolic_regularity = _clip01(0.7 * distance_regularity + 0.3 * target_alignment)
 
-        for idx in sample_indices:
-            point = normalized_points[idx]
-            # Count neighbors within radius 0.1
-            if normalized_points.shape[1] == 2:
-                distances = np.sqrt(((normalized_points - point)**2).sum(axis=1))
-            else:
-                distances = np.linalg.norm(normalized_points - point, axis=1)
-
-            neighbors = (distances < 0.1).sum()
-            local_densities.append(neighbors)
-
-        density_variance = np.var(local_densities) if local_densities else 0.0
-        contradiction_signal = min(1.0, density_variance / 50.0)
+    # Law-fit: ajuste de ley de escala en box-counting (ya no constante).
+    y = np.log(np.maximum(np.array(box_counts, dtype=float), 1.0))
+    x = np.array(log_eps, dtype=float)
+    x_mean = float(np.mean(x))
+    y_mean = float(np.mean(y))
+    denom = float(np.sum((x - x_mean) ** 2))
+    if denom > 0.0:
+        slope = float(np.sum((x - x_mean) * (y - y_mean)) / denom)
+        y_hat = y_mean + slope * (x - x_mean)
+        ss_tot = float(np.sum((y - y_mean) ** 2))
+        ss_res = float(np.sum((y - y_hat) ** 2))
+        fit_r2 = 1.0 - (ss_res / (ss_tot + 1e-9))
     else:
-        contradiction_signal = 0.2
+        fit_r2 = 0.0
+    law_fit_signal = _clip01(0.85 * fit_r2 + 0.15 * (1.0 - float(np.var(heterogeneity_scores))))
 
-    # Map rigidity parameter to edge_pressure
-    edge_pressure = meta_params.lambda_rig
-
-    # Map structural depth to causal_risk
-    # Deeper structures -> more causal dependencies
-    causal_risk = min(1.0, meta_params.lambda_fractal)
-
-    # Map to symbolic regularity based on D_q
-    # If D_q is close to target, high symbolic regularity
-    symbolic_regularity = max(0.0, 1.0 - abs(fractal_dimension - meta_params.target_dimension))
-
-    # Law fit signal from participation ratio (if available)
-    law_fit_signal = 0.3  # Default
-
-    # Continuity from spectral margin
-    continuity_recent = meta_params.spectral_margin_min
+    # Continuidad: margen espectral + coherencia geométrica.
+    spectral_base = _clip01(meta_params.spectral_margin_min)
+    continuity_recent = _clip01(
+        (0.5 * spectral_base)
+        + (0.3 * symbolic_regularity)
+        + (0.2 * (1.0 - contradiction_signal))
+    )
 
     return {
         "uncertainty": uncertainty,

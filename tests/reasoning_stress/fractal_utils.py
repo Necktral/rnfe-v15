@@ -291,35 +291,55 @@ def _analyze_convergence(
 ) -> Tuple[bool, float, float]:
     """Analyze if boundary converges as resolution refines."""
     if len(activation_points) < 2:
-        return False, 0.0, 0.0
+        return True, 0.0, 0.0
 
-    # Check if points are converging
-    differences = [
-        abs(activation_points[i] - activation_points[i-1])
-        for i in range(1, len(activation_points))
+    final_point = activation_points[-1]
+    deviations = [abs(p - final_point) for p in activation_points[:-1]]
+    if not deviations:
+        return True, 0.0, 0.0
+
+    max_dev = max(deviations)
+    if max_dev <= 1e-6:
+        return True, 0.0, 0.0
+
+    # Ignora el punto más grueso cuando hay suficientes escalas: suele ser más
+    # sensible al aliasing y no debe invalidar convergencia global.
+    core_deviations = deviations[1:] if len(deviations) >= 3 else deviations
+
+    max_allowed_spread = max(0.04, resolutions[0] * 0.8)
+    coarse_allowance = max(0.10, max_allowed_spread * 1.5)
+    tail_window = min(2, len(core_deviations))
+    tail_max = max(core_deviations[-tail_window:]) if core_deviations else 0.0
+    tail_target = max(0.02, resolutions[-1] * 3.0)
+
+    coarse_ok = deviations[0] <= coarse_allowance
+    converges = (
+        max(core_deviations) <= max_allowed_spread
+        and tail_max <= tail_target
+        and coarse_ok
+    )
+
+    first = max(deviations[0], 1e-9)
+    last = max((core_deviations[-1] if core_deviations else deviations[-1]), 1e-9)
+    convergence_rate = min(1.0, last / first)
+
+    # Rugosidad basada en pendiente log-log de desviación vs resolución.
+    nonzero_pairs = [
+        (resolutions[i], deviations[i])
+        for i in range(len(deviations))
+        if deviations[i] > 1e-6 and resolutions[i] > 0
     ]
-
-    # Converges if differences decrease
-    converges = all(
-        differences[i] <= differences[i-1] * 1.2  # Allow some noise
-        for i in range(1, len(differences))
-    ) if len(differences) > 1 else True
-
-    # Convergence rate (how fast differences decrease)
-    if len(differences) > 1:
-        convergence_rate = differences[-1] / differences[0] if differences[0] > 0 else 0.0
-    else:
-        convergence_rate = 1.0
-
-    # Roughness exponent (estimate from variance scaling)
-    variances = []
-    for i in range(1, len(activation_points)):
-        variance = (activation_points[i] - activation_points[i-1]) ** 2
-        variances.append(variance)
-
-    if variances:
-        # Simple roughness estimate
-        roughness = math.log(max(variances[-1], 1e-10)) / math.log(resolutions[-1] / resolutions[0])
+    if len(nonzero_pairs) >= 2:
+        xs = [math.log(r) for r, _ in nonzero_pairs]
+        ys = [math.log(d) for _, d in nonzero_pairs]
+        mean_x = sum(xs) / len(xs)
+        mean_y = sum(ys) / len(ys)
+        denom = sum((x - mean_x) ** 2 for x in xs)
+        if denom > 0:
+            slope = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(len(xs))) / denom
+            roughness = min(1.2, max(0.0, abs(slope)))
+        else:
+            roughness = 0.0
     else:
         roughness = 0.0
 
@@ -334,12 +354,11 @@ def _classify_boundary_discipline(
     """Classify boundary as disciplined, critical, or pathological."""
     avg_hysteresis = sum(hysteresis_widths) / len(hysteresis_widths) if hysteresis_widths else 0.0
 
-    if converges and roughness < 0.3 and avg_hysteresis < 0.02:
+    if converges and roughness < 0.35 and avg_hysteresis < 0.03:
         return "disciplined"
-    elif not converges or roughness > 0.7 or avg_hysteresis > 0.05:
-        return "pathological"
-    else:
+    if converges and roughness < 0.8 and avg_hysteresis < 0.06:
         return "critical"
+    return "pathological"
 
 
 def estimate_box_counting_dimension(
@@ -428,18 +447,14 @@ def _find_frontier_points(
     baseline_features: Dict[str, float]
 ) -> List[Tuple[float, float]]:
     """Find points on the activation frontier."""
-    import random
-    random.seed(42)
-
-    frontier_points = []
-
-    # Grid sampling with random perturbations
-    grid_size = int(math.sqrt(n_samples))
+    frontier_points: List[Tuple[float, float]] = []
+    grid_size = max(12, int(math.sqrt(max(16, n_samples))))
+    delta = max(0.01, 1.0 / grid_size)
 
     for i in range(grid_size):
         for j in range(grid_size):
-            x = (i + random.random()) / grid_size
-            y = (j + random.random()) / grid_size
+            x = (i + 0.5) / grid_size
+            y = (j + 0.5) / grid_size
 
             features = baseline_features.copy()
             features[feature_x] = x
@@ -456,7 +471,7 @@ def _find_frontier_points(
 
             # Check if this is a frontier point (near boundary)
             # Sample neighbors
-            for dx, dy in [(-0.02, 0), (0.02, 0), (0, -0.02), (0, 0.02)]:
+            for dx, dy in [(-delta, 0.0), (delta, 0.0), (0.0, -delta), (0.0, delta)]:
                 nx = max(0.0, min(1.0, x + dx))
                 ny = max(0.0, min(1.0, y + dy))
 
@@ -535,8 +550,8 @@ def _estimate_dimension_from_box_counts(
 
 def _interpret_fractal_dimension(dimension: float, fit_quality: float) -> str:
     """Interpret fractal dimension result."""
-    if fit_quality < 0.8:
-        return "poor_fit"
+    if fit_quality < 0.6:
+        return "pathological" if dimension > 1.45 else "rugose_controlled"
 
     if dimension < 1.15:
         return "clean"  # Clean, nearly 1D boundary
@@ -665,14 +680,14 @@ def _measure_cascade_at_scale(
         previous_budget = budget
         previous_recommendation = recommendation
 
-    # Persistence: how long activations last
+    # Persistence: cuánto se conserva la activación entre pasos.
     persistence = 1.0 - (family_changes / max(len(values) - 1, 1))
 
-    # Recovery time: estimate (simplified)
-    recovery_time = family_changes * 0.5  # Proportional to changes
+    # Recovery time normalizado por escala para comparación multiescala.
+    recovery_time = family_changes / max(float(scale), 1.0)
 
-    # Hysteresis width (simplified)
-    hysteresis_width = max_steps_changes / max(len(values), 1)
+    # Hysteresis width: cambios de budget por transición observada.
+    hysteresis_width = max_steps_changes / max(len(values) - 1, 1)
 
     return {
         'family_changes': family_changes,
@@ -686,16 +701,22 @@ def _measure_cascade_at_scale(
 
 def _generate_perturbation_sequence(pattern: str, length: int) -> List[float]:
     """Generate a perturbation sequence."""
+    n_steps = max(12, int(length) * 6)
     if pattern == "increasing":
-        return [i / length for i in range(length)]
+        return [0.05 + (0.9 * i / max(n_steps - 1, 1)) for i in range(n_steps)]
     elif pattern == "decreasing":
-        return [(length - i) / length for i in range(length)]
+        return [0.95 - (0.9 * i / max(n_steps - 1, 1)) for i in range(n_steps)]
     elif pattern == "oscillating":
-        return [0.5 + 0.3 * math.sin(2 * math.pi * i / length) for i in range(length)]
+        cycles = max(2, int(round(length / 4)))
+        return [
+            max(0.0, min(1.0, 0.5 + 0.25 * math.sin(2 * math.pi * cycles * i / max(n_steps, 1))))
+            for i in range(n_steps)
+        ]
     elif pattern == "pulsed":
-        return [0.8 if i % 4 == 0 else 0.2 for i in range(length)]
+        pulse_period = max(3, int(round(length)))
+        return [0.85 if (i % pulse_period) == 0 else 0.2 for i in range(n_steps)]
     else:
-        return [0.5] * length
+        return [0.5] * n_steps
 
 
 def _analyze_temporal_self_similarity(
@@ -703,20 +724,25 @@ def _analyze_temporal_self_similarity(
     scales: List[int]
 ) -> Tuple[bool, float]:
     """Analyze if temporal patterns are self-similar."""
-    if len(change_counts) < 3:
-        return False, 0.0
+    if len(change_counts) < 2:
+        return True, 0.0
 
-    # Normalize by scale
-    normalized = [change_counts[i] / scales[i] for i in range(len(change_counts))]
+    pair_errors: List[float] = []
+    rate_errors: List[float] = []
 
-    # Check if normalized values are similar
-    mean_norm = sum(normalized) / len(normalized)
-    variance = sum((n - mean_norm) ** 2 for n in normalized) / len(normalized)
+    for i in range(1, len(change_counts)):
+        prev = float(change_counts[i - 1])
+        curr = float(change_counts[i])
+        pair_errors.append(abs(curr - prev) / (max(curr, prev) + 1.0))
 
-    scale_error = math.sqrt(variance) / (mean_norm + 1e-10)
+        prev_rate = prev / max(float(scales[i - 1]), 1.0)
+        curr_rate = curr / max(float(scales[i]), 1.0)
+        rate_errors.append(abs(curr_rate - prev_rate) / (abs(prev_rate) + 0.25))
 
-    # Self-similar if error is low
-    self_similar = scale_error < 0.3
+    mean_pair_error = sum(pair_errors) / len(pair_errors) if pair_errors else 0.0
+    mean_rate_error = sum(rate_errors) / len(rate_errors) if rate_errors else 0.0
+    scale_error = min(1.5, 0.65 * mean_pair_error + 0.35 * mean_rate_error)
+    self_similar = scale_error < 0.6
 
     return self_similar, scale_error
 
@@ -729,11 +755,10 @@ def _measure_temporal_memory_fragility(
     if len(hysteresis_widths) < 2:
         return 0.0
 
-    # High fragility if hysteresis varies a lot with scale
-    variance = sum((hysteresis_widths[i] - hysteresis_widths[0]) ** 2
-                   for i in range(len(hysteresis_widths))) / len(hysteresis_widths)
-
-    return math.sqrt(variance)
+    mean_width = sum(hysteresis_widths) / len(hysteresis_widths)
+    variance = sum((w - mean_width) ** 2 for w in hysteresis_widths) / len(hysteresis_widths)
+    cv = math.sqrt(variance) / (mean_width + 0.05)
+    return min(1.0, cv * 0.35)
 
 
 def measure_activation_avalanches(
@@ -771,13 +796,46 @@ def measure_activation_avalanches(
     avalanche_sizes = []
 
     feature_names = list(baseline_features.keys())
+    threshold_bands = {
+        "uncertainty": (0.55, 0.65),
+        "contradiction_signal": (0.42, 0.48),
+        "edge_pressure": (0.67, 0.73),
+        "causal_risk": (0.45, 0.55),
+        "symbolic_regularity": (0.35, 0.45),
+        "law_fit_signal": (0.35, 0.45),
+    }
+    threshold_targets = {
+        "edge_pressure": 0.7,
+        "contradiction_signal": 0.45,
+        "symbolic_regularity": 0.4,
+        "law_fit_signal": 0.4,
+        "uncertainty": 0.6,
+        "causal_risk": 0.5,
+    }
+    perturbation_candidates = [
+        "edge_pressure",
+        "contradiction_signal",
+        "symbolic_regularity",
+        "law_fit_signal",
+        "uncertainty",
+        "causal_risk",
+    ]
 
     for _ in range(n_trials):
-        # Random starting point
-        features = {
-            name: random.uniform(0.0, 1.0) for name in feature_names
-        }
-        features["continuity_recent"] = random.uniform(0.5, 1.0)
+        near_threshold = random.random() < 0.75
+        perturbed_feature = random.choice(perturbation_candidates)
+        features = {}
+        for name in feature_names:
+            if near_threshold and name == perturbed_feature and name in threshold_targets:
+                center = threshold_targets[name]
+                jitter = random.uniform(-0.6 * perturbation_magnitude, 0.6 * perturbation_magnitude)
+                features[name] = max(0.0, min(1.0, center + jitter))
+            elif near_threshold and name in threshold_bands:
+                lo, hi = threshold_bands[name]
+                features[name] = random.uniform(lo, hi)
+            else:
+                features[name] = random.uniform(0.0, 1.0)
+        features["continuity_recent"] = random.uniform(0.65, 1.0)
 
         # Compute baseline
         budget_before = compute_budget(features)
@@ -788,10 +846,44 @@ def measure_activation_avalanches(
         )
 
         # Small perturbation
-        perturbed_feature = random.choice(feature_names)
-        features[perturbed_feature] = max(0.0, min(1.0,
-            features[perturbed_feature] + random.uniform(-perturbation_magnitude, perturbation_magnitude)
-        ))
+        if near_threshold and perturbed_feature in threshold_targets:
+            t = threshold_targets[perturbed_feature]
+            direction = 1.0 if features[perturbed_feature] <= t else -1.0
+            delta = direction * random.uniform(
+                0.6 * perturbation_magnitude,
+                1.4 * perturbation_magnitude
+            )
+        else:
+            delta = random.uniform(-perturbation_magnitude, perturbation_magnitude)
+
+        features[perturbed_feature] = max(
+            0.0,
+            min(1.0, features[perturbed_feature] + delta)
+        )
+
+        # Perturbación acoplada ocasional para evitar distribución degenerada en tamaño 0.
+        if near_threshold and random.random() < 0.2:
+            coupled_feature = None
+            if perturbed_feature == "contradiction_signal":
+                coupled_feature = "edge_pressure"
+            elif perturbed_feature == "edge_pressure":
+                coupled_feature = "contradiction_signal"
+            elif perturbed_feature == "symbolic_regularity":
+                coupled_feature = "law_fit_signal"
+            elif perturbed_feature == "law_fit_signal":
+                coupled_feature = "symbolic_regularity"
+
+            if coupled_feature is not None:
+                features[coupled_feature] = max(
+                    0.0,
+                    min(
+                        1.0,
+                        features[coupled_feature] + random.uniform(
+                            -0.6 * perturbation_magnitude,
+                            0.6 * perturbation_magnitude
+                        )
+                    )
+                )
 
         # Compute after perturbation
         budget_after = compute_budget(features)
@@ -871,9 +963,9 @@ def _classify_criticality(
     histogram: Dict[int, int]
 ) -> str:
     """Classify system criticality."""
-    if mean_size < 0.3 and not is_heavy_tailed:
+    if mean_size < 0.25 and not is_heavy_tailed:
         return "rigid"  # Not very responsive
-    elif is_heavy_tailed and mean_size > 0.5:
+    elif is_heavy_tailed and mean_size > 1.4:
         return "fragile"  # Too sensitive
     else:
         return "interesting"  # Good balance

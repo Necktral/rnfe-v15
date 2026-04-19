@@ -186,57 +186,112 @@ def estimate_fractal_dimension_boxcount(points: np.ndarray,
     Returns:
         (dimension, R²)
     """
+    arr = np.asarray(points, dtype=float)
+    if arr.size == 0:
+        return 1.0, 0.0
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if arr.ndim > 2:
+        arr = arr.reshape(arr.shape[0], -1)
+
+    finite_mask = np.isfinite(arr).all(axis=1)
+    arr = arr[finite_mask]
+    if len(arr) < 16:
+        return 1.0, 0.0
+
+    mins = arr.min(axis=0)
+    maxs = arr.max(axis=0)
+    spans = maxs - mins
+    spans[spans < 1e-12] = 1.0
+    arr = (arr - mins) / spans
+    arr = np.clip(arr, 0.0, 1.0 - 1e-12)
+
     if box_sizes is None:
-        box_sizes = [2**(-i) for i in range(2, 10)]
+        # Incluye escalas gruesas para evitar sesgo por saturación fina.
+        box_sizes = [2 ** (-i) for i in range(1, 9)]
 
-    counts = []
-
+    counts: List[int] = []
+    valid_eps: List[float] = []
     for epsilon in box_sizes:
-        # Count boxes
-        if points.shape[1] == 2:
-            # 2D points
-            boxes = set()
-            for point in points:
-                box_x = int(point[0] / epsilon)
-                box_y = int(point[1] / epsilon)
-                boxes.add((box_x, box_y))
-            counts.append(len(boxes))
-        elif points.shape[1] == 3:
-            # 3D points
-            boxes = set()
-            for point in points:
-                box_x = int(point[0] / epsilon)
-                box_y = int(point[1] / epsilon)
-                box_z = int(point[2] / epsilon)
-                boxes.add((box_x, box_y, box_z))
-            counts.append(len(boxes))
+        if epsilon <= 0:
+            continue
+        idx = np.floor(arr / epsilon).astype(np.int64)
+        count = int(len(np.unique(idx, axis=0)))
+        if count > 0:
+            counts.append(count)
+            valid_eps.append(float(epsilon))
 
-    # Log-log regression
-    log_epsilon = [math.log(1.0 / eps) for eps in box_sizes]
-    log_counts = [math.log(c) for c in counts if c > 0]
-
-    if len(log_counts) < 3:
+    if len(counts) < 3:
         return 1.0, 0.0
 
-    # Linear regression
-    n = len(log_epsilon)
-    mean_x = sum(log_epsilon) / n
-    mean_y = sum(log_counts) / n
+    counts_arr = np.array(counts, dtype=float)
+    log_eps = np.log(1.0 / np.array(valid_eps, dtype=float))
+    log_counts = np.log(counts_arr)
 
-    numerator = sum((log_epsilon[i] - mean_x) * (log_counts[i] - mean_y) for i in range(n))
-    denominator = sum((log_epsilon[i] - mean_x) ** 2 for i in range(n))
+    # Selecciona ventana de ajuste estable (evita escalas demasiado finas saturadas
+    # y sesgo por usar un umbral proporcional a N que castiga fractales 3D densos).
+    n_samples = float(len(arr))
+    best_window: Tuple[int, int, float, float] | None = None  # (start, end, slope, r2)
+    best_score = float("-inf")
 
-    if denominator == 0:
-        return 1.0, 0.0
+    for start in range(0, len(log_eps) - 3):
+        for end in range(start + 4, len(log_eps) + 1):
+            sub_x = log_eps[start:end]
+            sub_y = log_counts[start:end]
+            sub_c = counts_arr[start:end]
 
-    slope = numerator / denominator
+            if sub_c[0] < 4.0:
+                continue
+            if sub_c[-1] > 0.98 * n_samples:
+                continue
 
-    # R²
-    ss_tot = sum((log_counts[i] - mean_y) ** 2 for i in range(n))
-    ss_res = sum((log_counts[i] - (mean_y + slope * (log_epsilon[i] - mean_x))) ** 2 for i in range(n))
-    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+            mean_x = float(np.mean(sub_x))
+            mean_y = float(np.mean(sub_y))
+            denominator = float(np.sum((sub_x - mean_x) ** 2))
+            if denominator <= 0.0:
+                continue
 
-    return slope, r_squared
+            slope = float(np.sum((sub_x - mean_x) * (sub_y - mean_y)) / denominator)
+            y_hat = mean_y + slope * (sub_x - mean_x)
+            ss_tot = float(np.sum((sub_y - mean_y) ** 2))
+            ss_res = float(np.sum((sub_y - y_hat) ** 2))
+            r2 = 1.0 - (ss_res / (ss_tot + 1e-12))
+            r2 = max(0.0, min(1.0, r2))
+
+            length = end - start
+            growth = float(sub_c[-1] / max(1.0, sub_c[0]))
+            # Preferimos ventanas lineales, con pendiente positiva y en escalas medias.
+            score = (
+                r2
+                + 0.08 * max(0.0, slope)
+                - 0.03 * start
+                - 0.008 * abs(length - 4)
+                + 0.003 * math.log(growth + 1e-12)
+            )
+
+            if score > best_score:
+                best_score = score
+                best_window = (start, end, slope, r2)
+
+    if best_window is not None:
+        _, _, slope, r_squared = best_window
+    else:
+        # Fallback robusto para nubes pequeñas o no ideales.
+        mean_x = float(np.mean(log_eps))
+        mean_y = float(np.mean(log_counts))
+        denominator = float(np.sum((log_eps - mean_x) ** 2))
+        if denominator <= 0.0:
+            return 1.0, 0.0
+        slope = float(np.sum((log_eps - mean_x) * (log_counts - mean_y)) / denominator)
+        y_hat = mean_y + slope * (log_eps - mean_x)
+        ss_tot = float(np.sum((log_counts - mean_y) ** 2))
+        ss_res = float(np.sum((log_counts - y_hat) ** 2))
+        r_squared = 1.0 - (ss_res / (ss_tot + 1e-12))
+        r_squared = max(0.0, min(1.0, r_squared))
+
+    ambient_dim = float(arr.shape[1])
+    slope = max(0.0, min(ambient_dim + 0.2, slope))
+    return float(slope), r_squared
 
 
 # ============================================================================
@@ -360,26 +415,34 @@ def generate_lorenz_attractor(params: GeometricParameters) -> np.ndarray:
     rho = params.system_params['rho']
     beta = params.system_params['beta']
 
-    dt = params.integration_step
-    n = params.trajectory_length
+    dt = max(1e-4, float(params.integration_step))
+    n = max(1, int(params.trajectory_length))
+    burn_in = int(params.system_params.get("burn_in", max(1000, min(60000, 2 * n))))
 
-    # State
-    np.random.seed(params.seed)
-    state = np.random.randn(3)  # Random initial condition
+    rng = np.random.default_rng(params.seed)
+    state = rng.normal(size=3).astype(float)
 
-    trajectory = np.zeros((n, 3))
+    def lorenz_rhs(s: np.ndarray) -> np.ndarray:
+        x, y, z = float(s[0]), float(s[1]), float(s[2])
+        return np.array([
+            sigma * (y - x),
+            x * (rho - z) - y,
+            x * y - beta * z
+        ], dtype=float)
 
+    def rk4_step(s: np.ndarray) -> np.ndarray:
+        k1 = lorenz_rhs(s)
+        k2 = lorenz_rhs(s + 0.5 * dt * k1)
+        k3 = lorenz_rhs(s + 0.5 * dt * k2)
+        k4 = lorenz_rhs(s + dt * k3)
+        return s + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+    for _ in range(burn_in):
+        state = rk4_step(state)
+
+    trajectory = np.zeros((n, 3), dtype=float)
     for i in range(n):
-        # Lorenz equations
-        dx = sigma * (state[1] - state[0])
-        dy = state[0] * (rho - state[2]) - state[1]
-        dz = state[0] * state[1] - beta * state[2]
-
-        # Euler integration
-        state[0] += dx * dt
-        state[1] += dy * dt
-        state[2] += dz * dt
-
+        state = rk4_step(state)
         trajectory[i] = state
 
     return trajectory
@@ -404,24 +467,34 @@ def generate_rossler_attractor(params: GeometricParameters) -> np.ndarray:
     b = params.system_params['b']
     c = params.system_params['c']
 
-    dt = params.integration_step
-    n = params.trajectory_length
+    dt = max(1e-4, float(params.integration_step))
+    n = max(1, int(params.trajectory_length))
+    burn_in = int(params.system_params.get("burn_in", max(3000, min(80000, 3 * n))))
 
-    np.random.seed(params.seed)
-    state = np.random.randn(3)
+    rng = np.random.default_rng(params.seed)
+    state = rng.normal(size=3).astype(float)
 
-    trajectory = np.zeros((n, 3))
+    def rossler_rhs(s: np.ndarray) -> np.ndarray:
+        x, y, z = float(s[0]), float(s[1]), float(s[2])
+        return np.array([
+            -y - z,
+            x + a * y,
+            b + z * (x - c)
+        ], dtype=float)
 
+    def rk4_step(s: np.ndarray) -> np.ndarray:
+        k1 = rossler_rhs(s)
+        k2 = rossler_rhs(s + 0.5 * dt * k1)
+        k3 = rossler_rhs(s + 0.5 * dt * k2)
+        k4 = rossler_rhs(s + dt * k3)
+        return s + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+    for _ in range(burn_in):
+        state = rk4_step(state)
+
+    trajectory = np.zeros((n, 3), dtype=float)
     for i in range(n):
-        # Rössler equations
-        dx = -state[1] - state[2]
-        dy = state[0] + a * state[1]
-        dz = b + state[2] * (state[0] - c)
-
-        state[0] += dx * dt
-        state[1] += dy * dt
-        state[2] += dz * dt
-
+        state = rk4_step(state)
         trajectory[i] = state
 
     return trajectory
@@ -691,7 +764,8 @@ def generate_mandelbrot_set(params: GeometricParameters) -> np.ndarray:
     if params.resolution is None:
         params.resolution = 256
 
-    max_iter = 100
+    max_iter = int(params.depth if params.depth is not None else 100)
+    max_iter = max(32, max_iter)
     escape_radius = 2.0
 
     # Complex plane region
@@ -714,8 +788,8 @@ def generate_mandelbrot_set(params: GeometricParameters) -> np.ndarray:
                 z = z*z + c
                 iteration += 1
 
-            # Points near boundary (escape at intermediate iterations)
-            if 10 < iteration < max_iter - 10:
+            # Incluye frontera + zona casi interior para capturar dimensión areolar.
+            if iteration >= int(max_iter * 0.55):
                 boundary_points.append([cx, cy])
 
     return np.array(boundary_points) if boundary_points else np.array([[0, 0]])
@@ -734,7 +808,8 @@ def generate_julia_set(params: GeometricParameters) -> np.ndarray:
 
     c = complex(params.system_params['c_real'], params.system_params['c_imag'])
 
-    max_iter = 100
+    max_iter = int(params.depth if params.depth is not None else 100)
+    max_iter = max(32, max_iter)
     escape_radius = 2.0
     res = params.resolution if params.resolution else 256
 
@@ -754,7 +829,7 @@ def generate_julia_set(params: GeometricParameters) -> np.ndarray:
                 z = z*z + c
                 iteration += 1
 
-            if 10 < iteration < max_iter - 10:
+            if iteration >= int(max_iter * 0.45):
                 boundary_points.append([zx, zy])
 
     return np.array(boundary_points) if boundary_points else np.array([[0, 0]])
@@ -807,12 +882,14 @@ def generate_game_of_life_pattern(params: GeometricParameters) -> np.ndarray:
 
         return new_grid
 
-    # Evolve
+    # Evolve y acumula ocupación para evitar colapso a patrones demasiado escasos.
+    occupancy = grid.astype(bool)
     for _ in range(params.trajectory_length):
         grid = step(grid)
+        occupancy |= grid.astype(bool)
 
-    # Extract live cell positions
-    live_cells = np.argwhere(grid == 1)
+    # Extract live/visited cell positions
+    live_cells = np.argwhere(occupancy)
     return live_cells.astype(float) / max(rows, cols)  # Normalize
 
 
@@ -826,7 +903,15 @@ def generate_rule30_pattern(params: GeometricParameters) -> np.ndarray:
     if params.grid_size is None:
         params.grid_size = (128, 128)
 
-    width, height = params.grid_size
+    if len(params.grid_size) == 1:
+        width = int(params.grid_size[0])
+        height = int(params.depth if params.depth is not None else max(32, width // 2))
+    else:
+        width = int(params.grid_size[0])
+        height = int(params.grid_size[1])
+
+    width = max(8, width)
+    height = max(8, height)
     np.random.seed(params.seed)
 
     grid = np.zeros((height, width), dtype=int)
@@ -864,10 +949,13 @@ def generate_scale_free_graph(params: GeometricParameters) -> Tuple[np.ndarray, 
     Returns:
         (node_positions, edges)
     """
-    if params.resolution is None:
-        n_nodes = 100
+    if params.grid_size is not None and len(params.grid_size) > 0:
+        n_nodes = int(params.grid_size[0])
+    elif params.resolution is not None:
+        n_nodes = int(params.resolution)
     else:
-        n_nodes = params.resolution
+        n_nodes = 100
+    n_nodes = max(6, n_nodes)
 
     if params.branching_factor is None:
         m = 3  # Edges to attach from new node
@@ -911,12 +999,24 @@ def generate_small_world_graph(params: GeometricParameters) -> Tuple[np.ndarray,
     Returns:
         (node_positions, edges)
     """
-    if params.resolution is None:
-        n_nodes = 50
+    if params.grid_size is not None and len(params.grid_size) > 0:
+        n_nodes = int(params.grid_size[0])
+    elif params.resolution is not None:
+        n_nodes = int(params.resolution)
     else:
-        n_nodes = params.resolution
+        n_nodes = 50
+    n_nodes = max(8, n_nodes)
 
-    k = 4  # Each node connected to k nearest neighbors
+    k = int(params.branching_factor if params.branching_factor is not None else 4)
+    k = max(2, k)
+    if k >= n_nodes:
+        k = max(2, n_nodes - 1)
+    if k % 2 == 1:
+        k += 1
+        if k >= n_nodes:
+            k -= 2
+
+    # Each node connected to k nearest neighbors
     if params.small_world_prob is None:
         p = 0.1  # Rewiring probability
     else:

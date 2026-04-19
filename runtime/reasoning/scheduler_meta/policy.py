@@ -53,7 +53,15 @@ def _active_optional_families(
     features: Dict[str, float], *, allow_experimental: bool
 ) -> List[str]:
     active: List[str] = []
-    if features["edge_pressure"] >= 0.715:
+    # Gate formal en 0.7 + banda muerta para reducir oscilaciones en torno al umbral.
+    heur_activation = (
+        features["edge_pressure"] >= 0.7
+        and (
+            features["edge_pressure"] >= 0.715
+            or features["uncertainty"] >= 0.6
+        )
+    )
+    if heur_activation:
         active.append("heur")
     if features["contradiction_signal"] >= 0.45:
         active.extend(["dia_adv", "fal_guard"])
