@@ -173,8 +173,9 @@ class ThermalScenario(CognitiveScenario):
             1 (NORMAL), 2 (WARNING) o 3 (CRITICAL).
 
         Note:
-            ``warning_threshold=0.0`` deshabilita el nivel 2 — actúa como bandera
-            de habilitación ya que ningún valor normalizado útil es negativo.
+            ``warning_threshold=0.0`` deshabilita el nivel 2 — el guard
+            ``self._warning_threshold > 0.0`` previene activación cuando
+            el umbral no fue configurado explícitamente.
         """
         if temperature >= self._alarm_threshold:
             return 3

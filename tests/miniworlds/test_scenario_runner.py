@@ -404,3 +404,35 @@ class TestThreeLevelWorld:
         # Nivel 5 → se clampea a 3
         result = scheduler.run({"world_level": 5})
         assert len(result["sequence"]) == 11
+
+    # ─── Boundary condition tests ───────────────────────────────────────
+
+    def test_thermal_boundary_at_warning_threshold(self):
+        """Temperatura exactamente en warning_threshold (0.60) → nivel 2."""
+        scenario = ThermalScenario(initial_temperature=0.60)
+        obs = scenario.observe()
+        assert obs.level == 2
+        assert "TEMP_WARNING" in obs.propositions
+
+    def test_thermal_boundary_at_alarm_threshold(self):
+        """Temperatura exactamente en alarm_threshold (0.85) → nivel 3."""
+        scenario = ThermalScenario(initial_temperature=0.85)
+        obs = scenario.observe()
+        assert obs.level == 3
+        assert "TEMP_HIGH" in obs.propositions
+        assert obs.alarm is True
+
+    def test_resource_boundary_at_warning_threshold(self):
+        """Stock exactamente en warning_threshold (0.40) → nivel 2."""
+        scenario = ResourceScenario(initial_stock=0.40)
+        obs = scenario.observe()
+        assert obs.level == 2
+        assert "STOCK_LOW" in obs.propositions
+
+    def test_resource_boundary_at_scarcity_threshold(self):
+        """Stock exactamente en scarcity_threshold (0.20) → nivel 3."""
+        scenario = ResourceScenario(initial_stock=0.20)
+        obs = scenario.observe()
+        assert obs.level == 3
+        assert "STOCK_CRITICAL" in obs.propositions
+        assert obs.alarm is True
