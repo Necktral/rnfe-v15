@@ -1,3 +1,6 @@
+# [LEGACY — AEON FENIX-Δ en cuarentena] Orquestador AGI antiguo. Solo alcanzable
+# vía exocortex/channels/cli/aeon_main_loop; el camino vivo (organismo/RTCME) no
+# lo importa. Entrena sobre datos aleatorios. Ver docs/analysis/LEGACY_QUARANTINE.md.
 """
 aeon_fenix_delta.py – Orquestador AGI para AEON FENIX-Δ
 -------------------------------------------------------
@@ -207,7 +210,7 @@ class Orchestrator:
             'posterior.inference.0': 'posterior.inference.2'
         }
         self.neurogenesis_manager = NeurogenesisManager(
-            model=self.combined_model, 
+            model=self.combined_model,
             layers_to_expand=layers_to_expand,
             dependent_layers=dependent_layers
         )

@@ -1,7 +1,7 @@
 # src/aeon_types.py (renombrado para evitar conflicto con el módulo estándar types)
 from dataclasses import dataclass, field, asdict, astuple
 from typing import (
-    Dict, List, Tuple, Any, Optional, Union, Callable, ClassVar, 
+    Dict, List, Tuple, Any, Optional, Union, Callable, ClassVar,
     TypeVar, Generic, NewType, Protocol, runtime_checkable
 )
 from enum import Enum, auto
@@ -79,7 +79,7 @@ class CognitiveState:
     @property
     def stability_index(self) -> float:
         return (
-            self.prediction_accuracy * 0.4 + 
+            self.prediction_accuracy * 0.4 +
             (1 - self.uncertainty) * 0.3 +
             (1 - self.memory_load) * 0.3
         )
@@ -99,6 +99,8 @@ class HealthStatus:
     stability_index: float = 1.0
     operational_capacity: float = 1.0
     temp_forecast: float = 0.0
+    thermal_gradient: float = 0.0
+    cognitive_load: float = 0.0
     failure_probability: float = 0.0
     time_to_recovery: float = 0.0
     system_mode: SystemMode = SystemMode.NORMAL
