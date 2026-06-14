@@ -1,0 +1,101 @@
+# Evidence manifest — Reward Coherence Blindness Study
+# Documentation-only artifact. No runtime/test/data changes.
+
+study_name: reward_coherence_blindness
+study_date: 2026-06-14
+commit: 1fb81b9e
+branch: report/reward-blindness-1fb81b9e
+kind: measured_failure_mode            # not a gain, not a general improvement
+
+main_claim: >-
+  A coherence/process reward that does not measure effectiveness can suppress
+  causally effective reasoning families. In RNFE the IoC proxy is dominated by a
+  continuity term, so an effective deviating action LOWERS IoC: coherence-as-continuity
+  can penalize effective deviation, not merely ignore it.
+
+scientific_question: >-
+  Can a coherence reward suppress an effective family, and can an explicit
+  effectiveness term (lambda_v) recover it, and at what magnitude?
+
+hypothesis_verdicts:
+  H1_dose_response:
+    verdict: confirmed
+    evidence: >-
+      Mechanism retention [0,0,0,1,1] over lambda_v {0,0.1,0.25,0.5,1.0};
+      real-system OPT activation 0.0 -> 0.5 -> 1.0 -> 1.0 over lambda_v {0,5,20,50};
+      effectiveness rises with lambda_v (Cohen d ~= 4.14, between-seed CI excludes 0).
+  H2_specificity:
+    verdict: refuted_honestly
+    state: not_isolated
+    evidence: >-
+      Saturated tasks also activated the effective family with lambda_v
+      (delta = +1.000, CI excludes 0). The thermal-minimize scenario offers no
+      no-gap control (cooling further always helps), so specificity could not be
+      isolated. Bounds the claim; does not contradict H1/H3.
+  H3_noise_control:
+    verdict: confirmed
+    evidence: >-
+      Shuffling (decorrelating) the effectiveness signal does not recover the
+      family (retention 0.0-0.074, flat) ⇒ the effect is specific to the
+      effectiveness signal, not to any extra reward term.
+
+key_results:
+  lambda_v_threshold_real: ~20
+  lambda_v_threshold_idealized: ~0.5
+  threshold_ratio_real_over_idealized: ~40x
+  ioc_on_effective_override: {before: 0.888, after: 0.646, delta: -0.24}
+  ioc_drop_dominated_by: continuity_term      # not Omega
+  delta_ioc_star_noise: "+/-0.24 (~70x the effectiveness signal at lambda_v=0.5)"
+  lambda_v_status: contextual_not_universal_constant
+
+regimes:
+  - idealized_mechanism      # synthetic, flat coherence, 1000 seeds x 30 ep
+  - real_system              # organism core_plus_deliberative, 8 seeds x 36 ep, between-seed CI
+  - noise_control            # synthetic, effectiveness shuffled (H3)
+
+suite_result:
+  command: python -m pytest -q
+  passed: 946
+  failed: 0
+  skipped: 13
+  xfailed: 32                 # known fractal characterization, not real failures
+  xpassed: 1
+  exit_code: 0
+
+runtime_changes: false
+notes_runtime: >-
+  Env-only sweep (RNFE_REWARD_LAMBDA_EFFECTIVENESS, RNFE_REASONING_ACTUATES) plus
+  reading reasoning.reward events. With flags at default (off) the nominal path is
+  byte-identical. No runtime, test, module, or run-config changes.
+
+data_preservation:
+  full_raw_data_path: "D:\\rnfe_data\\"
+  archives:
+    - {name: cognitive_gain.tar.gz, approx_size: 193M}
+    - {name: ecology.tar.gz, approx_size: 105M}
+  verified_at: /mnt/d/rnfe_data/
+  repo_readable_reports:
+    - data/reports/reward_blindness/2026-06-14_coherence_reward_blindness.md
+    - data/reports/reward_blindness/REPORT.md
+    - data/reports/reward_blindness/results.json
+
+disk_cleanup_note: >-
+  Linux-side per-cell leak fixed (ephemeral scratch: tempdir + rmtree); data/ went
+  from 42G to 929M. Freed space is not returned to Windows C: until the WSL VHDX is
+  compacted (wsl --shutdown + wsl --manage <distro> --set-sparse true); fstrim
+  returns 0 because the vhdx is not sparse. User-side step, only if reclaiming C:.
+
+limitations:
+  - "lambda_v ~= 20 is contextual to this task's cost/effectiveness balance, not a universal constant."
+  - "H2 refuted: specificity could not be demonstrated."
+  - "Thermal control did not isolate a no-gap condition."
+  - "Possible metric coupling: IoC bundles continuity/closure/trace into one scalar."
+  - "Possible non-stationarity: conflict self-resolves; mitigated by per-episode reset."
+  - "Risk of over-interpreting IoC as universal coherence; it is a specific operational proxy."
+  - "Dataset/config specificity: single thermal task family, one effectiveness signal, one selector config."
+  - "No baseline vs standard methods (lookahead/RL); the override IS one-step lookahead."
+
+architectural_implication:
+  status: proposed_not_implemented
+  proposal: decompose single IoC scalar into IoC_struct + IoC_causal + IoC_identity
+  adr: docs/adr/ADR_REWARD_COHERENCE_BLINDNESS.md
